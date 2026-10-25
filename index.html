@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>BudgetFold OS — Financial Life OS</title>
+  <meta name="description" content="Pilote ton budget avec la méthode des enveloppes virtuelles. Tes données restent sur ton appareil.">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BudgetFold">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lucide@latest" defer></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i data-lucide="layers"></i></span>
+        <div class="brand-text">
+          <strong>BudgetFold</strong>
+          <span>Financial Life OS</span>
+        </div>
+      </div>
+      <button type="button" class="icon-btn" id="open-menu" aria-label="Ouvrir les options">
+        <i data-lucide="sliders-horizontal"></i>
+      </button>
+    </header>
+
+    <main class="layout">
+      <aside class="column column-side" aria-label="Tableau de bord">
+        <article class="engine" id="engine">
+          <div class="engine-top">
+            <span class="eyebrow" id="month-label"></span>
+            <span class="status" id="status" data-state="idle">
+              <i data-lucide="shield-check"></i>
+              <span id="status-text">À configurer</span>
+            </span>
+          </div>
+
+          <div class="salary">
+            <span class="engine-label">Salaire global</span>
+            <div class="salary-view" id="salary-view">
+              <span class="salary-amount" id="salary-amount" title="Double-clic pour modifier">—</span>
+              <button type="button" class="chip-btn" id="salary-edit" aria-label="Modifier le salaire global">
+                <i data-lucide="pencil"></i>
+              </button>
+            </div>
+            <span class="salary-extra" id="salary-extra" hidden></span>
+            <form class="salary-form" id="salary-form" hidden novalidate>
+              <label class="visually-hidden" for="salary-input">Salaire global</label>
+              <div class="money-input on-dark">
+                <input id="salary-input" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="Ex : 1 850">
+                <span>€</span>
+              </div>
+              <button type="submit" class="icon-btn solid" aria-label="Valider le salaire"><i data-lucide="check"></i></button>
+              <button type="button" class="icon-btn ghost-dark" id="salary-cancel" aria-label="Annuler"><i data-lucide="x"></i></button>
+            </form>
+            <p class="field-error on-dark" id="salary-error" role="alert" hidden></p>
+          </div>
+
+          <div class="engine-main">
+            <div class="remaining">
+              <span class="engine-label">Reste à vivre</span>
+              <strong class="remaining-amount" id="remaining-amount" data-negative="false">0 €</strong>
+              <span class="remaining-sub" id="remaining-sub"></span>
+            </div>
+            <div class="ring" role="img" aria-label="Répartition des revenus du mois">
+              <svg viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="ring-track" cx="60" cy="60" r="50"></circle>
+                <circle class="ring-seg seg-charges" id="seg-charges" cx="60" cy="60" r="50"></circle>
+                <circle class="ring-seg seg-spend" id="seg-spend" cx="60" cy="60" r="50"></circle>
+                <circle class="ring-seg seg-goal" id="seg-goal" cx="60" cy="60" r="50"></circle>
+                <circle class="ring-seg seg-free" id="seg-free" cx="60" cy="60" r="50"></circle>
+              </svg>
+              <div class="ring-center">
+                <strong id="ring-percent">0%</strong>
+                <span>libre</span>
+              </div>
+            </div>
+          </div>
+
+          <dl class="engine-stats">
+            <div class="stat">
+              <dt>Dépensé</dt>
+              <dd id="stat-spent">0 €</dd>
+            </div>
+            <div class="stat">
+              <dt>Encore dispo</dt>
+              <dd id="stat-left">0 €</dd>
+            </div>
+            <div class="stat">
+              <dt>À prélever</dt>
+              <dd id="stat-upcoming">0 €</dd>
+            </div>
+          </dl>
+
+          <ul class="legend">
+            <li><i class="dot dot-charges"></i>Charges <b id="legend-charges">0 €</b></li>
+            <li><i class="dot dot-spend"></i>Enveloppes <b id="legend-spend">0 €</b></li>
+            <li><i class="dot dot-goal"></i>Projets <b id="legend-goal">0 €</b></li>
+            <li><i class="dot dot-free"></i>Libre <b id="legend-free">0 €</b></li>
+          </ul>
+        </article>
+
+        <article class="card today" id="today" data-state="idle">
+          <div class="today-head">
+            <span class="today-label">Budget du jour</span>
+            <span class="today-days" id="today-days"></span>
+          </div>
+          <div class="today-main">
+            <strong class="today-amount" id="today-amount">—</strong>
+            <span class="today-caption" id="today-caption"></span>
+          </div>
+          <div class="bar" aria-hidden="true"><div class="bar-fill" id="today-fill"></div></div>
+          <p class="today-sub" id="today-sub"></p>
+          <button type="button" class="btn primary block" id="btn-add"><i data-lucide="plus"></i>Ajouter une dépense</button>
+        </article>
+      </aside>
+
+      <section class="column column-main" aria-label="Contenu">
+        <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+          <button type="button" class="tab" role="tab" data-tab="home" aria-selected="true"><i data-lucide="layout-grid"></i><span>Accueil</span></button>
+          <button type="button" class="tab" role="tab" data-tab="journal" aria-selected="false"><i data-lucide="receipt"></i><span>Journal</span></button>
+          <button type="button" class="tab" role="tab" data-tab="agenda" aria-selected="false"><i data-lucide="calendar-days"></i><span>Agenda</span></button>
+          <button type="button" class="tab" role="tab" data-tab="report" aria-selected="false"><i data-lucide="trending-up"></i><span>Bilan</span></button>
+        </nav>
+
+        <div id="views">
+          <section class="view" data-view="home" role="tabpanel">
+            <div class="insights" id="insights"></div>
+
+            <div class="section-head">
+              <h2>Enveloppes du mois</h2>
+              <span class="count" id="count-spend">0</span>
+              <button type="button" class="link-btn" id="add-spend"><i data-lucide="plus"></i>Nouvelle</button>
+            </div>
+            <div class="envelope-grid" id="spend-grid"></div>
+            <div class="empty" id="empty-spend">
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="wallet"></i></span>
+              <h3>Aucune enveloppe de dépenses</h3>
+              <p>Crée une enveloppe (Courses, Loisirs…) : son montant est réservé dès la création sur ton reste à vivre.</p>
+            </div>
+
+            <div class="section-head">
+              <h2>Projets de vie</h2>
+              <span class="count" id="count-project">0</span>
+              <button type="button" class="link-btn" id="add-project"><i data-lucide="plus"></i>Nouveau</button>
+            </div>
+            <div class="envelope-grid" id="project-grid"></div>
+            <div class="empty compact" id="empty-project">
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="target"></i></span>
+              <h3>Un projet en tête ?</h3>
+              <p>Voiture, apport immobilier, voyage : fixe un objectif et une mise mensuelle, on s'occupe du suivi.</p>
+            </div>
+          </section>
+
+          <section class="view" data-view="journal" role="tabpanel" hidden>
+            <div class="period">
+              <button type="button" class="icon-btn" id="j-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
+              <strong id="j-label"></strong>
+              <button type="button" class="icon-btn" id="j-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
+            </div>
+            <div class="tiles" id="j-summary"></div>
+            <div class="toolbar">
+              <div class="select-wrap">
+                <label class="visually-hidden" for="j-filter">Filtrer</label>
+                <select id="j-filter"></select>
+              </div>
+              <button type="button" class="btn primary compact" id="j-add"><i data-lucide="plus"></i>Ajouter</button>
+            </div>
+            <div id="j-list"></div>
+            <div class="empty" id="j-empty">
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="receipt"></i></span>
+              <h3>Rien à afficher</h3>
+              <p>Aucune opération pour ce mois et ce filtre. Ajoute une dépense depuis le bouton +, ou importe ton relevé bancaire depuis les options.</p>
+            </div>
+          </section>
+
+          <section class="view" data-view="agenda" role="tabpanel" hidden>
+            <article class="card pad">
+              <div class="card-head">
+                <div>
+                  <h2>Trésorerie du mois</h2>
+                  <p class="muted">Ton solde jour après jour, avec les prélèvements à venir.</p>
+                </div>
+                <button type="button" class="link-btn" id="cash-edit"><i data-lucide="sliders-horizontal"></i>Réglages</button>
+              </div>
+              <div class="chart" id="cash-chart"></div>
+              <ul class="chart-legend">
+                <li><i class="dot dot-income"></i>Revenu</li>
+                <li><i class="dot dot-charge"></i>Prélèvement</li>
+                <li><i class="dot dot-project"></i>Épargne</li>
+                <li><i class="dash"></i>Projection</li>
+              </ul>
+              <p class="cash-note" id="cash-note"></p>
+            </article>
+
+            <article class="card pad">
+              <div class="card-head">
+                <h2 id="cal-label"></h2>
+              </div>
+              <div class="cal-week" aria-hidden="true"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
+              <div class="calendar" id="calendar"></div>
+              <div class="day-detail" id="day-detail"></div>
+            </article>
+
+            <div class="section-head">
+              <h2>Échéancier</h2>
+              <span class="rec-summary" id="rec-summary"></span>
+              <button type="button" class="link-btn" id="add-recurring"><i data-lucide="plus"></i>Ajouter</button>
+            </div>
+            <div class="rec-list" id="rec-list"></div>
+            <div class="empty compact" id="rec-empty">
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="calendar-days"></i></span>
+              <h3>Aucune échéance</h3>
+              <p>Ajoute ton loyer, tes abonnements ou une aide mensuelle : ils apparaissent dans le calendrier et sont réservés sur ton reste à vivre.</p>
+            </div>
+          </section>
+
+          <section class="view" data-view="report" role="tabpanel" hidden>
+            <div class="period">
+              <button type="button" class="icon-btn" id="r-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
+              <strong id="r-label"></strong>
+              <button type="button" class="icon-btn" id="r-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
+            </div>
+            <div class="tiles" id="r-tiles"></div>
+            <article class="card pad" id="r-bars"></article>
+            <article class="card pad" id="r-notes"></article>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footnote">
+      <i data-lucide="lock"></i>
+      Tes données restent sur cet appareil. Aucun serveur, aucun suivi.
+    </footer>
+  </div>
+
+  <button type="button" class="fab" id="fab" aria-label="Ajouter une dépense"><i data-lucide="plus"></i></button>
+
+  <dialog class="sheet" id="dlg-tx" aria-labelledby="tx-title">
+    <form id="tx-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="tx-title">Nouvelle dépense</h2>
+          <p id="tx-sub"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="segmented" id="tx-mode">
+        <input type="radio" name="tx-mode" id="tx-mode-expense" value="expense" checked>
+        <label for="tx-mode-expense"><i data-lucide="minus"></i>Dépense</label>
+        <input type="radio" name="tx-mode" id="tx-mode-income" value="income">
+        <label for="tx-mode-income"><i data-lucide="plus"></i>Revenu</label>
+      </div>
+      <div class="field">
+        <label for="tx-amount">Montant</label>
+        <div class="money-input large">
+          <input id="tx-amount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="0">
+          <span>€</span>
+        </div>
+      </div>
+      <div class="quick" id="tx-quick"></div>
+      <div class="field" id="tx-env-field">
+        <span class="field-label" id="tx-env-label">Enveloppe</span>
+        <div class="chips" id="tx-chips" role="radiogroup" aria-labelledby="tx-env-label"></div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="tx-note">Note (facultatif)</label>
+          <input id="tx-note" type="text" maxlength="80" autocomplete="off" placeholder="Ex : Marché, cinéma…">
+        </div>
+        <div class="field">
+          <label for="tx-date">Date</label>
+          <input id="tx-date" type="date">
+        </div>
+      </div>
+      <p class="hint" id="tx-hint"></p>
+      <p class="field-error" id="tx-error" role="alert" hidden></p>
+      <div class="sheet-actions three">
+        <button type="button" class="btn ghost danger-text" id="tx-delete" hidden><i data-lucide="trash-2"></i>Supprimer</button>
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary" id="tx-submit">Ajouter la dépense</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-env" aria-labelledby="env-title">
+    <form id="env-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="env-title">Nouvelle enveloppe</h2>
+          <p>Le montant est bloqué immédiatement sur ton reste à vivre.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="segmented" id="env-kind-wrap">
+        <input type="radio" name="env-kind" id="env-kind-spend" value="spend" checked>
+        <label for="env-kind-spend"><i data-lucide="wallet"></i>Dépenses</label>
+        <input type="radio" name="env-kind" id="env-kind-project" value="project">
+        <label for="env-kind-project"><i data-lucide="target"></i>Projet de vie</label>
+      </div>
+      <div class="field">
+        <label for="env-name">Nom</label>
+        <input id="env-name" type="text" maxlength="40" autocomplete="off" placeholder="Courses, Voyage, Apport…">
+      </div>
+      <div id="env-spend-fields">
+        <div class="field">
+          <label for="env-max">Montant max par mois</label>
+          <div class="money-input">
+            <input id="env-max" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+            <span>€</span>
+          </div>
+        </div>
+      </div>
+      <div id="env-project-fields" hidden>
+        <div class="field">
+          <label for="env-target">Objectif final</label>
+          <div class="money-input">
+            <input id="env-target" type="text" inputmode="decimal" autocomplete="off" placeholder="10 000">
+            <span>€</span>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="env-saved">Déjà épargné</label>
+            <div class="money-input">
+              <input id="env-saved" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+              <span>€</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="env-monthly">Mise mensuelle</label>
+            <div class="money-input">
+              <input id="env-monthly" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+              <span>€</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint" id="env-hint"></p>
+      <p class="field-error" id="env-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary" id="env-submit">Créer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-rec" aria-labelledby="rec-title">
+    <form id="rec-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="rec-title">Nouvelle échéance</h2>
+          <p>Un prélèvement ou un revenu qui revient chaque mois.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="segmented" id="rec-type-wrap">
+        <input type="radio" name="rec-type" id="rec-type-charge" value="charge" checked>
+        <label for="rec-type-charge"><i data-lucide="minus"></i>Charge fixe</label>
+        <input type="radio" name="rec-type" id="rec-type-income" value="income">
+        <label for="rec-type-income"><i data-lucide="plus"></i>Revenu</label>
+      </div>
+      <div class="field">
+        <label for="rec-label">Nom</label>
+        <input id="rec-label" type="text" maxlength="40" autocomplete="off" placeholder="Loyer, Électricité, APL…">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="rec-amount">Montant</label>
+          <div class="money-input">
+            <input id="rec-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+            <span>€</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="rec-day">Jour du mois</label>
+          <input id="rec-day" type="text" inputmode="numeric" autocomplete="off" placeholder="1 à 31">
+        </div>
+      </div>
+      <div class="field">
+        <label for="rec-cat">Catégorie</label>
+        <div class="select-wrap">
+          <select id="rec-cat">
+            <option value="logement">Logement</option>
+            <option value="energie">Énergie &amp; internet</option>
+            <option value="abonnement">Abonnement</option>
+            <option value="assurance">Assurance</option>
+            <option value="transport">Transport</option>
+            <option value="telephone">Téléphone</option>
+            <option value="sante">Santé</option>
+            <option value="revenu">Revenu</option>
+            <option value="autre">Autre</option>
+          </select>
+        </div>
+      </div>
+      <p class="hint" id="rec-hint"></p>
+      <p class="field-error" id="rec-error" role="alert" hidden></p>
+      <div class="sheet-actions three">
+        <button type="button" class="btn ghost danger-text" id="rec-delete" hidden><i data-lucide="trash-2"></i>Supprimer</button>
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-settings" aria-labelledby="set-title">
+    <form id="set-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="set-title">Réglages du mois</h2>
+          <p>Pour une trésorerie plus fiable.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="field">
+        <label for="set-day">Jour de réception du salaire</label>
+        <input id="set-day" type="text" inputmode="numeric" autocomplete="off" placeholder="1 à 31">
+      </div>
+      <div class="field">
+        <label for="set-opening">Solde du compte au 1er du mois (facultatif)</label>
+        <div class="money-input">
+          <input id="set-opening" type="text" inputmode="decimal" autocomplete="off" placeholder="Laisse vide si tu ne sais pas">
+          <span>€</span>
+        </div>
+      </div>
+      <p class="hint">Avec ton solde de départ, l'agenda t'alerte avant un éventuel découvert.</p>
+      <p class="field-error" id="set-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-welcome" data-lock aria-labelledby="welcome-title">
+    <div class="sheet-body welcome">
+      <section id="w-step1" class="stack">
+        <span class="welcome-badge" aria-hidden="true"><i data-lucide="layers"></i></span>
+        <h2 id="welcome-title">Bienvenue sur BudgetFold</h2>
+        <p class="muted">Ton argent, rangé en enveloppes. Commençons par ton revenu mensuel net.</p>
+        <div class="field">
+          <label for="w-income">Revenu mensuel net</label>
+          <div class="money-input large">
+            <input id="w-income" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="1 450">
+            <span>€</span>
+          </div>
+        </div>
+      </section>
+      <section id="w-step2" class="stack" hidden>
+        <h2>Choisis un point de départ</h2>
+        <p class="muted">Les montants sont calculés à partir de ton revenu. Tu pourras tout modifier ensuite.</p>
+        <div class="tpl-grid" id="w-templates"></div>
+      </section>
+      <p class="field-error" id="w-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="w-skip">Passer</button>
+        <button type="button" class="btn ghost" id="w-back">Retour</button>
+        <button type="button" class="btn primary" id="w-next">Continuer</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-confirm" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <header class="sheet-head">
+        <div>
+          <h2 id="confirm-title">Confirmer</h2>
+          <p id="confirm-text"></p>
+        </div>
+      </header>
+      <div class="sheet-actions">
+        <button type="submit" value="cancel" class="btn ghost">Annuler</button>
+        <button type="submit" value="confirm" class="btn primary" id="confirm-ok">Confirmer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-import" aria-labelledby="imp-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="imp-title">Importer un relevé</h2>
+          <p id="imp-summary"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <p class="hint">Lecture 100 % locale. Vérifie l'enveloppe de chaque ligne : BudgetFold retient tes choix pour la prochaine fois.</p>
+      <div class="import-list" id="imp-list"></div>
+      <p class="field-error" id="imp-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="imp-cancel">Annuler</button>
+        <button type="button" class="btn primary" id="imp-confirm">Importer</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-menu" aria-labelledby="menu-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="menu-title">Options</h2>
+          <p>Tes données, ton appareil, tes règles.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <ul class="menu-list">
+        <li>
+          <button type="button" class="menu-item" id="menu-install" hidden>
+            <span class="menu-ico"><i data-lucide="smartphone"></i></span>
+            <span><strong>Installer l'application</strong><small>Ajoute BudgetFold à ton écran d'accueil</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-csv">
+            <span class="menu-ico"><i data-lucide="file-spreadsheet"></i></span>
+            <span><strong>Importer un relevé bancaire</strong><small>Fichier CSV téléchargé depuis ta banque</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-settings">
+            <span class="menu-ico"><i data-lucide="calendar-clock"></i></span>
+            <span><strong>Réglages du mois</strong><small>Jour de paie, solde de départ</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-export">
+            <span class="menu-ico"><i data-lucide="download"></i></span>
+            <span><strong>Exporter mes données</strong><small>Sauvegarde au format JSON</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-import">
+            <span class="menu-ico"><i data-lucide="upload"></i></span>
+            <span><strong>Importer une sauvegarde</strong><small>Remplace les données actuelles</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item danger" id="menu-wipe">
+            <span class="menu-ico"><i data-lucide="trash-2"></i></span>
+            <span><strong>Tout effacer</strong><small>Supprime salaire, enveloppes et journal</small></span>
+          </button>
+        </li>
+      </ul>
+      <p class="privacy-note"><i data-lucide="lock"></i>Tout est stocké localement dans ton navigateur : rien n'est envoyé en ligne.</p>
+    </div>
+  </dialog>
+
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+  <input type="file" id="csv-file" accept=".csv,.txt,text/csv,text/plain" hidden>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>
