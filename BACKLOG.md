@@ -38,7 +38,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
 
 ---
 
-## 2. Projets et simulation (P1)
+## 2. Projets et simulation (P1) — ✅ fait (phases 1 à 3)
 
 - **Libellés plus clairs** :
   - Remplacer « C'est faisable » par « Compatible avec ta marge actuelle (après charges et enveloppes) ».

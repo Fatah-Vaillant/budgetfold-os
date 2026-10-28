@@ -9,7 +9,7 @@
     "test": "node --check script.js && node tests/run.js",
     "test:app": "node tests/run.js app",
     "test:ocr": "node tests/run.js ocr",
-    "test:fast": "node --check script.js && node tests/run.js app data projects receipts"
+    "test:fast": "node --check script.js && node tests/run.js app cycle data projects receipts simulation"
   },
   "devDependencies": {
     "@tesseract.js-data/fra": "1.0.0",

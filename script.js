@@ -223,6 +223,37 @@
     { words: ['zara', 'h&m', 'primark', 'kiabi', 'uniqlo', 'celio', 'jules', 'vinted', 'zalando'], env: /vetement|habit|shopping|mode/ }
   ];
 
+  // Projets : types d'objectifs, moment du versement, couleurs et icônes.
+  const GOAL_TYPES = {
+    monthly: { label: 'X € par mois', short: 'Mise fixe', icon: 'repeat' },
+    date: { label: 'Pour une date', short: 'Pour une date', icon: 'calendar-check' },
+    fill: { label: 'Réserve à remplir', short: 'Réserve', icon: 'battery-medium' }
+  };
+  const TIMINGS = {
+    pay: { label: 'Jour de paie', text: 'le jour de paie' },
+    first: { label: 'Le 1er', text: 'au début du mois' },
+    end: { label: 'Fin de mois', text: 'en fin de mois' }
+  };
+  const PRIORITIES = { 1: 'Haute', 2: 'Normale', 3: 'Basse' };
+  const PALETTE = {
+    amber: 'Ambre', emerald: 'Émeraude', blue: 'Bleu', violet: 'Violet', rose: 'Rose', teal: 'Turquoise', orange: 'Orange', slate: 'Ardoise'
+  };
+  const PROJECT_ICONS = ['target', 'house', 'car', 'bike', 'plane', 'graduation-cap', 'baby', 'heart', 'gift', 'laptop', 'smartphone', 'sofa',
+    'shield', 'wrench', 'piggy-bank', 'music', 'camera', 'shopping-bag', 'sparkles', 'umbrella'];
+  const NOTES_MAX = 4000;
+  // Simulation : taux en points de base (1 % = 100) saisis par l'utilisateur, montants en centimes.
+  function cleanSim(raw) {
+    const bp = (v) => clampInt(v, -5000, 5000, 0);
+    const sc = raw.scenarios || {};
+    const money0 = (v) => (v === null || v === undefined || v === '' ? null : toCents(v));
+    return {
+      yieldBp: bp(raw.yieldBp), inflationBp: bp(raw.inflationBp),
+      raise: toCents(raw.raise), raiseFrom: isMonthKey(raw.raiseFrom) ? raw.raiseFrom : null,
+      scenarios: { prudent: money0(sc.prudent), real: money0(sc.real), ambitious: money0(sc.ambitious) },
+      compareId: typeof raw.compareId === 'string' ? raw.compareId : null
+    };
+  }
+
   const emptyState = () => ({
     v: DATA_VERSION,
     salary: 0,
@@ -272,16 +303,30 @@
         const target = toCents(e.target);
         if (target <= 0) continue;
         names.add(key);
-        s.envelopes.push({
+        const deadline = isMonthKey(e.deadline) ? e.deadline : null;
+        const monthly = toCents(e.monthly);
+        const p = {
           id: takeId(e.id), kind: 'project', name, target,
-          saved: Math.min(toCents(e.saved), target),
-          monthly: toCents(e.monthly),
+          saved: e.safety === true ? toCents(e.saved) : Math.min(toCents(e.saved), target),
+          monthly,
           mode: e.mode === 'plan' ? 'plan' : 'active',
-          deadline: isMonthKey(e.deadline) ? e.deadline : null,
+          deadline,
           startMonth: isMonthKey(e.startMonth) ? e.startMonth : null,
+          goalType: GOAL_TYPES[e.goalType] ? e.goalType : !monthly && deadline ? 'date' : 'monthly',
+          timing: TIMINGS[e.timing] ? e.timing : 'pay',
+          priority: clampInt(e.priority, 1, 3, 2),
+          color: PALETTE[e.color] ? e.color : 'amber',
+          icon: PROJECT_ICONS.includes(e.icon) ? e.icon : 'target',
+          category: e.category === 'wish' ? 'wish' : 'project',
+          notes: String(e.notes ?? '').replace(/\r/g, '').slice(0, NOTES_MAX),
+          checklist: arr(e.checklist).filter((c) => c && cleanText(c.text, 120)).slice(0, 100)
+            .map((c) => ({ id: typeof c.id === 'string' && c.id ? c.id : uid(), text: cleanText(c.text, 120), done: Boolean(c.done) })),
           createdAt
-        });
-        if (e.safety === true) s.envelopes[s.envelopes.length - 1].safety = true;
+        };
+        if (e.safety === true) p.safety = true;
+        if (isISO(e.boughtAt)) p.boughtAt = e.boughtAt;
+        if (e.sim && typeof e.sim === 'object') p.sim = cleanSim(e.sim);
+        s.envelopes.push(p);
       } else {
         const max = toCents(e.max);
         if (max <= 0) continue;
@@ -322,11 +367,11 @@
       if (!t || typeof t !== 'object') continue;
       const amount = toCents(t.amount);
       if (amount <= 0 || !isISO(t.date)) continue;
-      const type = ['expense', 'income', 'deposit'].includes(t.type) ? t.type : null;
+      const type = ['expense', 'income', 'deposit', 'withdraw'].includes(t.type) ? t.type : null;
       if (!type) continue;
       let envId = typeof t.envId === 'string' && envIds.has(t.envId) ? t.envId : null;
       if (type === 'expense' && envId && !isSpend(envId)) envId = null;
-      if (type === 'deposit' && !(envId && envIds.get(envId).kind === 'project')) continue;
+      if ((type === 'deposit' || type === 'withdraw') && !(envId && envIds.get(envId).kind === 'project')) continue;
       if (type === 'income') envId = null;
       const tx = { id: takeId(t.id), type, envId, amount, note: cleanNote(t.note), date: t.date, ts: Number.isFinite(t.ts) ? t.ts : 0 };
       const detail = cleanDetail(t.detail);
@@ -696,14 +741,22 @@
   // Versements marqués « c'est la mise de ce mois » : ils remplacent la mise automatique au lieu de s'y ajouter.
   const coveredIn = (e, key) => state.transactions.reduce((s, t) => s + (t.type === 'deposit' && t.envId === e.id && t.covers === key ? t.amount : 0), 0);
 
+  // Mise mensuelle effective : fixe, ou recalculée chaque mois pour tenir la date (« atteindre X avant telle date »).
+  function monthlyOf(e, key = currentMonth()) {
+    if (e.goalType !== 'date' || !e.deadline) return e.monthly;
+    const months = Math.max(1, monthDiff(key, e.deadline) + 1);
+    return Math.ceil(Math.max(0, e.target - e.saved) / months / 100) * 100;
+  }
+
   function projectContribution(e, key) {
-    if (e.mode !== 'active' || e.monthly <= 0) return 0;
-    if (e.startMonth && key < e.startMonth) return 0;
     const cm = currentMonth();
-    const due = Math.max(0, e.monthly - coveredIn(e, key));
+    const monthly = monthlyOf(e, key < cm ? key : cm);
+    if (e.mode !== 'active' || monthly <= 0 || e.category === 'wish') return 0;
+    if (e.startMonth && key < e.startMonth) return 0;
+    const due = Math.max(0, monthly - coveredIn(e, key));
     if (key < cm) return projectDone(e) ? 0 : due;
     const k = monthDiff(maxMonth(cm, e.startMonth || cm), key);
-    const savedAtStart = e.saved + e.monthly * k;
+    const savedAtStart = e.saved + monthly * k;
     return Math.max(0, Math.min(due, e.target - savedAtStart));
   }
 
@@ -745,6 +798,8 @@
         if (future) incomeUpcoming += t.amount;
       } else if (t.type === 'deposit') {
         if (t.src !== 'close') deposits += t.amount;
+      } else if (t.type === 'withdraw') {
+        // Dépense payée avec l'argent d'une réserve : déjà mis de côté, ne touche pas le reste à vivre.
       } else {
         if (future) upcoming += t.amount;
         else spentToDate += t.amount;
@@ -819,6 +874,8 @@
       if (tx.type === 'income') {
         inc[day] += tx.amount;
         events[day].push({ label: tx.note || 'Revenu', amount: tx.amount, type: 'income', planned, txId: tx.id });
+      } else if (tx.type === 'withdraw') {
+        events[day].push({ label: `Depuis la réserve · ${(findEnv(tx.envId) || {}).name || 'projet'}`, amount: 0, type: 'project', planned, txId: tx.id });
       } else if (tx.type === 'deposit') {
         out[day] += tx.amount;
         const env = findEnv(tx.envId);
@@ -844,9 +901,17 @@
         }
       }
     }
-    if (d.projectsMonthly > 0) {
-      out[sd] += d.projectsMonthly;
-      events[sd].push({ label: 'Épargne projets', amount: -d.projectsMonthly, type: 'project', planned: sd > t });
+    // Épargne des projets, au moment choisi pour chacun : jour de paie, début ou fin du mois budgétaire.
+    const savingDay = { pay: sd, first: 1, end: n };
+    const savings = new Map();
+    for (const e of state.envelopes) {
+      if (e.kind !== 'project') continue;
+      const c = projectContribution(e, key);
+      if (c > 0) savings.set(savingDay[e.timing] || sd, (savings.get(savingDay[e.timing] || sd) || 0) + c);
+    }
+    for (const [day, amount] of savings) {
+      out[day] += amount;
+      events[day].push({ label: 'Épargne projets', amount: -amount, type: 'project', planned: day > t });
     }
 
     const spread = d.isPast ? 0 : d.spend.reduce((s, r) => s + Math.max(0, r.alloc - r.inMonth), 0);
@@ -900,7 +965,7 @@
     const until = addDays(today, days);
     const list = [];
     for (const t of state.transactions) {
-      if (t.date <= today || t.date > until) continue;
+      if (t.date <= today || t.date > until || t.type === 'withdraw') continue;
       const env = findEnv(t.envId);
       list.push({
         date: t.date,
@@ -929,7 +994,7 @@
     return list;
   }
 
-  function monthsToGoal(e, monthly = e.monthly) {
+  function monthsToGoal(e, monthly = monthlyOf(e)) {
     if (projectDone(e)) return 0;
     if (monthly <= 0) return null;
     return Math.ceil((e.target - e.saved) / monthly);
@@ -949,11 +1014,105 @@
     const months = e.deadline ? Math.max(1, monthDiff(cm, e.deadline) + 1) : null;
     const needed = months ? Math.ceil(missing / months / 100) * 100 : null;
     const capacity = Math.max(0, freeNow + reserved);
-    const monthly = e.monthly > 0 ? e.monthly : needed || 0;
+    const monthly = e.goalType === 'date' && needed !== null ? needed : e.monthly > 0 ? e.monthly : needed || 0;
     const gap = monthly - capacity;
     const eta = monthly > 0 ? shiftMonth(cm, Math.max(0, Math.ceil(missing / monthly) - 1)) : null;
     const etaCapacity = capacity > 0 ? shiftMonth(cm, Math.max(0, Math.ceil(missing / capacity) - 1)) : null;
-    return { missing, months, needed, capacity, monthly, gap, eta, etaCapacity, late: Boolean(e.deadline && eta && eta > e.deadline) };
+    const delay = e.deadline && eta ? monthDiff(e.deadline, eta) : null;
+    return { missing, months, needed, capacity, monthly, gap, eta, etaCapacity, delay, late: Boolean(e.deadline && eta && eta > e.deadline) };
+  }
+
+  // Résultats toujours complets : mise nécessaire pour la date, date atteinte avec la mise, écart, compatibilité avec la marge.
+  function projectResults(e, p = projectPlan(e)) {
+    const lines = [];
+    if (e.saved >= e.target && !e.safety) return [['ok', e.goalType === 'fill' ? 'Réserve pleine : la mise reprendra si tu y puises.' : 'Objectif déjà atteint.']];
+    const month = (k) => monthName(k).toLowerCase();
+    if (e.deadline) lines.push(['', `Pour ${month(e.deadline)}, il faut ${money(p.needed)} par mois (${p.months} mois).`]);
+    if (p.monthly > 0 && p.eta) {
+      const when = p.delay === null ? '' : p.delay > 0 ? ` (${p.delay} mois de retard)` : p.delay < 0 ? ` (${-p.delay} mois d'avance)` : ' (pile à l\'heure)';
+      lines.push([p.late ? 'bad' : '', `Avec ${money(p.monthly)} par mois, tu l'atteins en ${month(p.eta)}${when}.`]);
+    }
+    if (e.deadline && p.needed !== null && e.goalType !== 'date' && e.monthly > 0 && e.monthly < p.needed) {
+      lines.push(['bad', `Il te faudrait mettre ${money(p.needed - e.monthly)} de plus par mois pour tenir ta date.`]);
+    }
+    lines.push(['', `Ta marge actuelle : ${money(p.capacity)} par mois.`]);
+    if (p.monthly > 0) {
+      lines.push(p.gap > 0
+        ? ['bad', `Il manque ${money(p.gap)} par mois sur ta marge actuelle pour cette mise de ${money(p.monthly)} (après charges et enveloppes).`]
+        : ['ok', `Compatible avec ta marge actuelle (après charges et enveloppes) : il te resterait ${money(-p.gap)} par mois.`]);
+    }
+    if (p.gap > 0 && p.capacity > 0 && p.etaCapacity) lines.push(['', `Avec toute ta marge (${money(p.capacity)}/mois) : vers ${month(p.etaCapacity)}.`]);
+    return lines;
+  }
+
+  // Simulation mois par mois, en centimes entiers : mise (+ hausse prévue), rendement et inflation saisis par l'utilisateur.
+  function simulate({ target, saved, monthly, start = currentMonth(), yieldBp = 0, inflationBp = 0, raise = 0, raiseFrom = null, max = 600 }) {
+    let bal = saved;
+    let goal = target;
+    const points = [{ key: shiftMonth(start, -1), bal, goal }];
+    if (bal >= goal) return { reached: shiftMonth(start, -1), months: 0, points };
+    for (let i = 0; i < max; i++) {
+      const key = shiftMonth(start, i);
+      bal += monthly + (raise > 0 && raiseFrom && key >= raiseFrom ? raise : 0);
+      bal += Math.round((bal * yieldBp) / 120000);
+      goal += Math.round((goal * inflationBp) / 120000);
+      points.push({ key, bal, goal });
+      if (bal >= goal) return { reached: key, months: i + 1, points };
+      if (monthly <= 0 && !(raise > 0) && yieldBp <= 0) break;
+    }
+    return { reached: null, months: null, points };
+  }
+
+  // Scénarios par défaut : tirés des chiffres de l'utilisateur, jamais d'un taux inventé.
+  function simScenarios(e, p = projectPlan(e)) {
+    const sim = e.sim || {};
+    const sc = sim.scenarios || {};
+    const real = sc.real ?? (p.monthly || 0);
+    const prudent = sc.prudent ?? Math.min(real, p.capacity || real);
+    const ambitious = sc.ambitious ?? Math.max(real, p.capacity);
+    return { prudent, real, ambitious };
+  }
+
+  function runScenarios(e, p = projectPlan(e)) {
+    const sim = e.sim || {};
+    const sc = simScenarios(e, p);
+    const base = { target: e.target, saved: e.saved, yieldBp: sim.yieldBp || 0, inflationBp: sim.inflationBp || 0, raise: sim.raise || 0, raiseFrom: sim.raiseFrom || null };
+    return Object.fromEntries(Object.entries(sc).map(([k, monthly]) => [k, { monthly, ...simulate({ ...base, monthly }) }]));
+  }
+
+  // Conseils calculés à partir de l'historique (enveloppes sous-utilisées) et de la marge.
+  function projectAdvice() {
+    const out = [];
+    const closed = state.closings.slice(-6);
+    const under = new Map();
+    for (const c of closed) {
+      for (const env of c.snapshot.envs || []) {
+        if (!spendEnv(env.id)) continue;
+        const u = under.get(env.id) || { name: env.name, gap: 0, n: 0 };
+        u.gap += env.budget - env.spent;
+        u.n += 1;
+        under.set(env.id, u);
+      }
+    }
+    const unused = [...under.values()].map((u) => ({ ...u, avg: Math.round(u.gap / u.n) })).filter((u) => u.avg >= 500).sort((a, b) => b.avg - a.avg);
+    const total = unused.reduce((s, u) => s + u.avg, 0);
+    if (total > 0) out.push({ icon: 'lightbulb', text: `Tes enveloppes sous-utilisées libèrent environ ${moneyRound(total)} par mois (moyenne sur ${closed.length} ${plural(closed.length, 'mois', 'mois')} clôturés).` });
+    const projects = state.envelopes.filter((e) => e.kind === 'project' && e.category !== 'wish' && !projectDone(e) && !e.safety)
+      .sort((a, b) => a.priority - b.priority);
+    const top = projects.find((e) => projectPlan(e).monthly > 0);
+    if (top) {
+      const p = projectPlan(top);
+      const months = (m) => Math.ceil(p.missing / m);
+      if (unused.length) {
+        const cut = Math.floor(unused[0].avg / 500) * 500;
+        const gain = months(p.monthly) - months(p.monthly + cut);
+        if (cut > 0 && gain > 0) out.push({ icon: 'trending-up', text: `En réduisant « ${unused[0].name} » de ${moneyRound(cut)}/mois, « ${top.name} » arrive ${gain} ${plural(gain, 'mois', 'mois')} plus tôt.` });
+      }
+      if (p.capacity > p.monthly && p.eta && p.etaCapacity && p.etaCapacity < p.eta) {
+        out.push({ icon: 'zap', text: `Avec toute ta marge (${money(p.capacity)}/mois), « ${top.name} » serait atteint en ${monthName(p.etaCapacity).toLowerCase()} au lieu de ${monthName(p.eta).toLowerCase()}.` });
+      }
+    }
+    return out;
   }
 
   function computeInsights(d) {
@@ -1196,9 +1355,10 @@
       const closing = key;
       key = shiftMonth(key, 1);
       for (const e of state.envelopes) {
-        if (e.kind !== 'project' || e.mode !== 'active' || e.monthly <= 0 || e.saved >= e.target) continue;
-        if (e.startMonth && closing < e.startMonth) continue;
-        const add = Math.min(Math.max(0, e.monthly - coveredIn(e, closing)), e.target - e.saved);
+        if (e.kind !== 'project' || e.mode !== 'active' || e.category === 'wish' || e.saved >= e.target) continue;
+        const monthly = monthlyOf(e, closing);
+        if (monthly <= 0 || (e.startMonth && closing < e.startMonth)) continue;
+        const add = Math.min(Math.max(0, monthly - coveredIn(e, closing)), e.target - e.saved);
         if (add <= 0) continue;
         e.saved += add;
         credits.set(e.id, (credits.get(e.id) || 0) + add);
@@ -1222,8 +1382,9 @@
       if (input.saved > input.target) return fail("Le montant déjà épargné ne peut pas dépasser l'objectif.");
       if (input.monthly === null) return fail('Indique une mise mensuelle valide, ou laisse vide.');
       if (input.deadline && input.deadline < key) return fail("L'échéance doit être ce mois-ci ou plus tard.");
+      if (input.goalType === 'date' && !input.deadline) return fail('Choisis une date pour cet objectif, ou un autre type d\'objectif.');
       if (input.mode === 'active') {
-        if (input.monthly <= 0 && input.saved < input.target) return fail('Indique une mise par mois, ou une date pour la calculer.');
+        if (monthlyOf(input) <= 0 && input.saved < input.target) return fail('Indique une mise par mois, ou une date pour la calculer.');
         const probe = { ...(existing || {}), ...input, mode: 'active' };
         const first = maxMonth(key, probe.startMonth || key);
         const free = first === key ? d.free : derive(first).free;
@@ -1246,13 +1407,30 @@
     return ok(name);
   }
 
+  // Champs facultatifs d'un projet (type d'objectif, versement, priorité, couleur, icône, catégorie).
+  function projectExtras(input, base = {}) {
+    const goalType = GOAL_TYPES[input.goalType] ? input.goalType : base.goalType || 'monthly';
+    return {
+      goalType,
+      timing: TIMINGS[input.timing] ? input.timing : base.timing || 'pay',
+      priority: clampInt(input.priority ?? base.priority, 1, 3, 2),
+      color: PALETTE[input.color] ? input.color : base.color || 'amber',
+      icon: PROJECT_ICONS.includes(input.icon) ? input.icon : base.icon || 'target',
+      category: input.category === 'wish' || (input.category === undefined && base.category === 'wish') ? 'wish' : 'project'
+    };
+  }
+
   function createEnvelope(input) {
-    if (derive().income <= 0) return fail('Commence par renseigner ton salaire global.');
+    if (derive().income <= 0 && !(input.kind === 'project' && input.mode === 'plan')) return fail('Commence par renseigner ton salaire global.');
     const check = validateEnvelope(input, null);
     if (!check.ok) return check;
     const base = { id: uid(), name: check.data, createdAt: clock.now() };
     const env = input.kind === 'project'
-      ? { ...base, kind: 'project', target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.deadline || null, startMonth: isMonthKey(input.startMonth) ? input.startMonth : null }
+      ? {
+        ...base, kind: 'project', target: input.target, saved: input.saved, monthly: input.goalType === 'date' ? monthlyOf(input) : input.monthly, mode: input.mode,
+        deadline: input.goalType === 'fill' ? null : input.deadline || null, startMonth: isMonthKey(input.startMonth) ? input.startMonth : null,
+        ...projectExtras(input), notes: '', checklist: []
+      }
       : { ...base, kind: 'spend', max: input.max, period: input.period, anchor: clock.today(), reset: null };
     state.envelopes.push(env);
     lastAddedId = env.id;
@@ -1267,7 +1445,7 @@
     if (!check.ok) return check;
     env.name = check.data;
     if (env.kind === 'project') {
-      Object.assign(env, { target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.deadline || null });
+      Object.assign(env, { target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.goalType === 'fill' ? null : input.deadline || null }, projectExtras(input, env));
       if (input.startMonth !== undefined) env.startMonth = isMonthKey(input.startMonth) ? input.startMonth : null;
     } else {
       if (env.period !== input.period) env.anchor = clock.today();
@@ -1276,6 +1454,26 @@
     }
     commit();
     return ok(env);
+  }
+
+  // Notes, étapes, simulation, achat d'une envie : pas de règle de calcul, pas de contrôle de marge.
+  function updateProjectInfo(id, patch) {
+    const env = findEnv(id);
+    if (!env || env.kind !== 'project') return fail('Projet introuvable.');
+    if (patch.notes !== undefined) env.notes = String(patch.notes).replace(/\r/g, '').slice(0, NOTES_MAX);
+    if (patch.checklist !== undefined) env.checklist = patch.checklist.slice(0, 100).map((c) => ({ id: c.id || uid(), text: cleanText(c.text, 120), done: Boolean(c.done) })).filter((c) => c.text);
+    if (patch.sim !== undefined) env.sim = cleanSim(patch.sim);
+    if (patch.boughtAt !== undefined) {
+      if (isISO(patch.boughtAt)) env.boughtAt = patch.boughtAt;
+      else delete env.boughtAt;
+    }
+    commit();
+    return ok(env);
+  }
+
+  function addWish({ name, price }) {
+    if (price === null || !(price > 0)) return fail('Indique un prix valide (ex : 59).');
+    return createEnvelope({ kind: 'project', name, target: price, saved: 0, monthly: 0, deadline: null, mode: 'plan', goalType: 'monthly', category: 'wish', icon: 'shopping-bag', color: 'violet', priority: 3 });
   }
 
   function resetEnvelope(id) {
@@ -1398,10 +1596,23 @@
       const already = env.saved - (prev && prev.type === 'deposit' && prev.envId === env.id ? prev.amount : 0);
       const room = env.target - already;
       if (!env.safety && t.amount > room) return fail(room <= 0 ? 'Cet objectif est déjà atteint.' : `Il ne manque que ${money(room)} pour atteindre l'objectif.`);
+    } else if (t.type === 'withdraw') {
+      const env = findEnv(t.envId);
+      if (!env || env.kind !== 'project') return fail('Choisis la réserve ou le projet.');
+      const available = env.saved + (prev && prev.type === 'withdraw' && prev.envId === env.id ? prev.amount : 0) - (prev && prev.type === 'deposit' && prev.envId === env.id ? prev.amount : 0);
+      if (t.amount > available) return fail(available <= 0 ? `« ${env.name} » est vide.` : `Il n'y a que ${money(available)} dans « ${env.name} ».`);
     } else if (t.type !== 'income') {
       return fail('Type inconnu.');
     }
     return ok();
+  }
+
+  // Effet d'une opération sur l'épargne d'un projet : +1 pour un versement, −1 pour un retrait.
+  function applySaved(tx, sign) {
+    const env = findEnv(tx.envId);
+    if (!env || env.kind !== 'project') return;
+    const delta = tx.type === 'deposit' ? tx.amount : tx.type === 'withdraw' ? -tx.amount : 0;
+    env.saved = Math.max(0, env.saved + sign * delta);
   }
 
   function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false }, { silent = false } = {}) {
@@ -1414,7 +1625,7 @@
     if (ref) t.ref = ref;
     if (recId) t.recId = recId;
     state.transactions.push(t);
-    if (type === 'deposit') findEnv(envId).saved += amount;
+    applySaved(t, 1);
     if (type === 'expense' && t.envId) state.prefs.lastEnvId = t.envId;
     if (!silent) commit();
     return ok(t);
@@ -1427,17 +1638,14 @@
     if (next.type === 'income') next.envId = null;
     const check = validateTx(next, tx);
     if (!check.ok) return check;
-    if (tx.type === 'deposit') {
-      const env = findEnv(tx.envId);
-      if (env) env.saved = Math.max(0, env.saved - tx.amount);
-    }
+    applySaved(tx, -1);
     Object.assign(tx, { type: next.type, envId: next.envId || null, amount: next.amount, date: next.date, note: cleanNote(next.note) });
     if (tx.type === 'deposit' && next.covers) tx.covers = budgetKey(tx.date);
     else delete tx.covers;
     const dt = cleanDetail(next.detail);
     if (dt) tx.detail = dt;
     else delete tx.detail;
-    if (tx.type === 'deposit') findEnv(tx.envId).saved += tx.amount;
+    applySaved(tx, 1);
     if (tx.type === 'expense' && tx.envId) state.prefs.lastEnvId = tx.envId;
     commit();
     return ok(tx);
@@ -1447,10 +1655,7 @@
     const index = state.transactions.findIndex((t) => t.id === id);
     if (index === -1) return fail('Opération introuvable.');
     const [tx] = state.transactions.splice(index, 1);
-    if (tx.type === 'deposit') {
-      const env = findEnv(tx.envId);
-      if (env) env.saved = Math.max(0, env.saved - tx.amount);
-    }
+    applySaved(tx, -1);
     commit();
     return ok(tx);
   }
@@ -1458,10 +1663,7 @@
   function restoreTransaction(tx) {
     if (state.transactions.some((t) => t.id === tx.id)) return;
     state.transactions.push({ ...tx });
-    if (tx.type === 'deposit') {
-      const env = findEnv(tx.envId);
-      if (env) env.saved = Math.min(env.target, env.saved + tx.amount);
-    }
+    applySaved(tx, 1);
     commit();
   }
 
@@ -1955,7 +2157,13 @@
     'tx-repeat', 'tx-until-field', 'tx-until', 'tx-detail-box', 'tx-detail', 'tx-series', 'tx-series-text', 'tx-series-edit',
     'tx-hint', 'tx-error', 'tx-delete', 'tx-submit', 'dlg-env', 'env-form', 'env-title', 'env-sub', 'env-kind-wrap',
     'env-name', 'env-spend-fields', 'env-max', 'env-period', 'env-project-fields', 'env-mode-wrap', 'env-target',
-    'env-saved', 'env-deadline', 'env-monthly', 'env-start-field', 'env-start-wrap', 'env-start-pay-text', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
+    'env-saved', 'env-deadline', 'env-monthly', 'env-start-field', 'env-start-wrap', 'env-start-pay-text', 'env-goal', 'env-goal-hint',
+    'env-deadline-field', 'env-deadline-label', 'env-more', 'env-color', 'env-icon', 'p-sort', 'p-new', 'p-advice', 'p-groups',
+    'wish-form', 'wish-name', 'wish-price', 'wish-error', 'wish-list', 'dlg-project', 'pj-icon', 'pj-title', 'pj-sub', 'pj-progress',
+    'pj-deposit', 'pj-withdraw', 'pj-buy', 'pj-edit', 'pj-withdraw-form', 'pj-withdraw-amount', 'pj-withdraw-note', 'pj-error',
+    'pj-results', 'pj-sim-section', 'sim-prudent', 'sim-real', 'sim-ambitious', 'sim-yield', 'sim-inflation', 'sim-raise',
+    'sim-raise-from', 'sim-compare', 'sim-error', 'sim-out', 'sim-chart', 'pj-notes', 'pj-check-form', 'pj-check-input',
+    'pj-checklist', 'pj-history', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
@@ -2017,8 +2225,8 @@
   const signed = (cents) => `${cents < 0 ? '−' : '+'}${money(Math.abs(cents))}`;
 
   const ui = { tab: 'home', journalMonth: null, journalFilter: 'all', reportMonth: null, agendaMonth: null, agendaDay: null, lastScan: null, reportMode: 'month', historyRange: 3, historyOpen: null };
-  const TABS = ['home', 'journal', 'agenda', 'report'];
-  const TAB_HASH = { home: '', journal: '#journal', agenda: '#agenda', report: '#bilan' };
+  const TABS = ['home', 'journal', 'projects', 'agenda', 'report'];
+  const TAB_HASH = { home: '', journal: '#journal', projects: '#projets', agenda: '#agenda', report: '#bilan' };
 
   function render() {
     const d = derive();
@@ -2040,6 +2248,7 @@
     if (ui.tab === 'home') renderHome(d);
     else if (ui.tab === 'journal') renderJournal();
     else if (ui.tab === 'agenda') renderAgenda();
+    else if (ui.tab === 'projects') renderProjects();
     else renderReport();
   }
 
@@ -2223,7 +2432,7 @@
   }
 
   const createSpendCard = (row) => cardShell('spend', row.id, 'wallet');
-  const createProjectCard = (env) => cardShell('project', env.id, 'target');
+  const createProjectCard = (env) => cardShell('project', env.id, env.icon || 'target');
 
   // « Bien tenu » : on dépense moins vite que le temps qui passe. Une enveloppe est un plafond, pas un objectif.
   function wellKept(row, today = clock.today()) {
@@ -2274,9 +2483,16 @@
     const ratio = env.target > 0 ? env.saved / env.target : 0;
     const percent = Math.round(Math.min(1, ratio) * 100);
     el.dataset.state = done ? 'done' : plan ? 'plan' : 'progress';
+    el.dataset.color = env.color || 'amber';
+    const iconBox = el.querySelector('.envelope-icon');
+    if (iconBox.dataset.icon !== (env.icon || 'target')) {
+      iconBox.dataset.icon = env.icon || 'target';
+      fill(iconBox, icon(env.icon || 'target'));
+      flushIcons();
+    }
     r.name.textContent = env.name;
     r.name.title = env.name;
-    r.kind.textContent = env.deadline ? `Pour ${monthName(env.deadline).toLowerCase()}` : 'Sans date';
+    r.kind.textContent = env.goalType === 'fill' ? 'Réserve à remplir' : env.safety ? 'Épargne de précaution' : env.deadline ? `Pour ${monthName(env.deadline).toLowerCase()}` : 'Sans date';
     r.badge.hidden = !plan && !done;
     r.badge.textContent = done ? 'Atteint' : 'Plan';
     r.badge.dataset.tone = done ? 'ok' : 'plan';
@@ -2290,20 +2506,20 @@
     const p = projectPlan(env);
     r.left.textContent = `${percent} %`;
     if (done) {
-      r.right.textContent = 'Objectif atteint';
-      r.note.textContent = 'Bravo ! Sa mise mensuelle est libérée.';
+      r.right.textContent = env.goalType === 'fill' ? 'Réserve pleine' : 'Objectif atteint';
+      r.note.textContent = env.goalType === 'fill' ? 'La mise reprendra dès que tu y puises.' : 'Bravo ! Sa mise mensuelle est libérée.';
     } else if (plan) {
       const monthly = p.monthly;
       r.right.textContent = monthly > 0 ? `${money(monthly)}/mois` : 'À définir';
       if (!monthly) r.note.textContent = 'Simulation : indique une date ou une mise mensuelle.';
       else if (p.gap > 0) r.note.textContent = `Il te manque ${money(p.gap)}/mois pour le lancer. Avec ta marge (${money(p.capacity)}/mois), objectif vers ${monthName(p.etaCapacity || p.eta).toLowerCase()}.`;
-      else r.note.textContent = `Faisable : il te resterait ${money(-p.gap)}/mois. Touche pour l'activer.`;
+      else r.note.textContent = `Compatible avec ta marge actuelle : il te resterait ${money(-p.gap)}/mois. Touche pour voir la fiche.`;
     } else {
       const months = monthsToGoal(env);
       r.right.textContent = months === null ? 'Sans mise' : `≈ ${durationLabel(months)}`;
       r.note.textContent = months === null
         ? 'Ajoute une mise mensuelle pour avancer automatiquement.'
-        : `+${money(env.monthly)}/mois versés en fin de mois · ${p.late ? 'en retard sur ta date' : `atteint vers ${monthName(p.eta).toLowerCase()}`}`;
+        : `+${money(monthlyOf(env))}/mois mis de côté ${(TIMINGS[env.timing] || TIMINGS.pay).text} · ${p.late ? 'en retard sur ta date' : `atteint vers ${monthName(p.eta).toLowerCase()}`}`;
     }
     r.note.hidden = false;
     el.setAttribute('aria-label', `Modifier ${env.name}`);
@@ -2340,6 +2556,7 @@
   function txIcon(tx) {
     if (tx.type === 'income') return 'banknote';
     if (tx.type === 'deposit') return 'piggy-bank';
+    if (tx.type === 'withdraw') return 'battery-low';
     if (tx.recId) {
       const r = findRule(tx.recId);
       return r ? ruleIcon(r) : 'repeat';
@@ -2352,6 +2569,7 @@
     const bits = [];
     if (t.type === 'income') bits.push('Revenu');
     else if (t.type === 'deposit') bits.push(`Projet · ${env ? env.name : ''}`);
+    else if (t.type === 'withdraw') bits.push(`Payé avec « ${env ? env.name : 'la réserve'} »`);
     else bits.push(env ? env.name : t.recId ? 'Prélèvement' : 'Hors enveloppe');
     if (t.recId) {
       const r = findRule(t.recId);
@@ -2366,12 +2584,12 @@
 
   function txRow(t) {
     const env = findEnv(t.envId);
-    const title = t.note || (t.type === 'income' ? 'Revenu' : t.type === 'deposit' ? 'Versement' : env ? env.name : 'Dépense');
+    const title = t.note || (t.type === 'income' ? 'Revenu' : t.type === 'deposit' ? 'Versement' : t.type === 'withdraw' ? 'Retrait' : env ? env.name : 'Dépense');
     const planned = t.date > clock.today();
     return h('button', { type: 'button', class: 'tx-row', dataset: { id: t.id, type: t.type, orphan: String(t.type === 'expense' && !env && !t.recId), planned: String(planned) } },
       h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
       h('span', { class: 'tx-body' }, h('strong', {}, title, planned ? h('em', { class: 'tag-planned', text: 'Prévu' }) : null), h('small', { text: txSub(t) })),
-      h('span', { class: 'tx-amount', text: `${t.type === 'expense' || t.type === 'deposit' ? '−' : '+'}${money(t.amount)}` }));
+      h('span', { class: 'tx-amount', text: `${t.type === 'income' ? '+' : '−'}${money(t.amount)}` }));
   }
 
   function moveRow(m) {
@@ -2412,7 +2630,7 @@
       if (f === 'planned') return t.date > today;
       if (f === 'orphan') return t.type === 'expense' && !t.envId && !t.recId;
       if (f === 'income') return t.type === 'income';
-      if (f === 'deposit') return t.type === 'deposit';
+      if (f === 'deposit') return t.type === 'deposit' || t.type === 'withdraw';
       if (f === 'moves') return t.type === 'move';
       if (f.startsWith('env:') && t.type === 'move') return `env:${t.from}` === f || `env:${t.to}` === f;
       return t.type === 'expense' && `env:${t.envId}` === f;
@@ -3292,11 +3510,16 @@
     const target = parseAmount(els.envTarget.value);
     const saved = optional(els.envSaved);
     const deadline = isMonthKey(els.envDeadline.value) ? els.envDeadline.value : null;
+    const goalType = GOAL_TYPES[checkedValue(els.envForm, 'env-goal')] ? checkedValue(els.envForm, 'env-goal') : 'monthly';
     let monthly = optional(els.envMonthly);
-    if (els.envMonthly.value.trim() === '' && deadline && target && saved !== null) {
+    if ((goalType === 'date' || els.envMonthly.value.trim() === '') && deadline && target && saved !== null && goalType !== 'fill') {
       monthly = projectPlan({ target, saved, deadline, monthly: 0, mode: 'plan' }).needed || 0;
     }
-    const out = { kind: 'project', name: els.envName.value, target, saved, monthly, deadline, mode };
+    const out = {
+      kind: 'project', name: els.envName.value, target, saved, monthly, deadline: goalType === 'fill' ? null : deadline, mode, goalType,
+      timing: checkedValue(els.envForm, 'env-timing') || 'pay', priority: Number(checkedValue(els.envForm, 'env-priority') || 2),
+      color: checkedValue(els.envForm, 'env-color') || 'amber', icon: checkedValue(els.envForm, 'env-icon') || 'target'
+    };
     if (!els.envStartField.hidden) out.startMonth = checkedValue(els.envForm, 'env-start') === 'now' ? currentMonth() : nextPayMonth();
     return out;
   }
@@ -3308,9 +3531,36 @@
     if (show) els.envStartPayText.textContent = `À la prochaine paie (${monthName(nextPayMonth()).toLowerCase()})`;
   }
 
+  // Pastilles de couleur et grille d'icônes (boutons radio, accessibles au clavier).
+  function renderChoices() {
+    if (!els.envColor.children.length) {
+      fill(els.envColor, Object.entries(PALETTE).map(([key, label]) => [
+        h('input', { type: 'radio', name: 'env-color', id: `env-color-${key}`, value: key }),
+        h('label', { for: `env-color-${key}`, class: 'swatch', dataset: { color: key }, title: label }, h('span', { class: 'visually-hidden', text: label }))]));
+      fill(els.envIcon, PROJECT_ICONS.map((ic) => [
+        h('input', { type: 'radio', name: 'env-icon', id: `env-icon-${ic}`, value: ic }),
+        h('label', { for: `env-icon-${ic}`, class: 'icon-choice', title: ic }, icon(ic), h('span', { class: 'visually-hidden', text: ic }))]));
+      flushIcons();
+    }
+  }
+
+  function syncGoalFields() {
+    const goal = checkedValue(els.envForm, 'env-goal') || 'monthly';
+    els.envDeadlineField.hidden = goal === 'fill';
+    els.envDeadlineLabel.textContent = goal === 'date' ? 'Pour quand ?' : 'Pour quand ? (facultatif)';
+    els.envMonthly.disabled = goal === 'date';
+    els.envMonthly.placeholder = goal === 'date' ? 'Calculée' : goal === 'fill' ? 'Ex : 30' : 'Auto';
+    els.envGoalHint.textContent = goal === 'date'
+      ? 'La mise est recalculée chaque mois pour tenir ta date.'
+      : goal === 'fill'
+        ? 'Pour une réserve (entretien voiture, cadeaux…) : la mise s\'arrête quand elle est pleine et reprend quand tu y puises.'
+        : 'Tu choisis la mise ; la date d\'arrivée est calculée.';
+  }
+
   function syncEnvFields() {
     els.envSpendFields.hidden = envUi.kind !== 'spend';
     els.envProjectFields.hidden = envUi.kind !== 'project';
+    syncGoalFields();
     els.envSub.textContent = envUi.kind === 'spend'
       ? 'Un budget qui se remet à zéro à chaque période.'
       : 'Actif : épargné chaque mois. Plan : simulation, rien n\'est bloqué.';
@@ -3318,6 +3568,7 @@
 
   function updateEnvHint() {
     syncEnvStart();
+    syncGoalFields();
     const d = derive();
     const existing = envUi.id ? findEnv(envUi.id) : null;
     const input = envInput();
@@ -3336,19 +3587,7 @@
     if (!input.target || input.saved === null || input.monthly === null) return setHint(els.envHint, 'Indique au moins un objectif.');
     const probe = { ...(existing || {}), ...input };
     const p = projectPlan(probe, d.free, existing && existing.kind === 'project' ? projectContribution(existing, d.key) : 0);
-    const lines = [];
-    if (input.saved >= input.target) lines.push(['ok', 'Objectif déjà atteint.']);
-    else {
-      if (input.deadline) lines.push(['', `Pour ${monthName(input.deadline).toLowerCase()} : il faut ${money(p.needed)} par mois (${p.months} mois).`]);
-      lines.push(['', `Ta marge actuelle : ${money(p.capacity)} par mois.`]);
-      if (p.monthly > 0) {
-        lines.push(p.gap > 0
-          ? ['bad', `Il manque ${money(p.gap)} par mois pour cette mise de ${money(p.monthly)}.`]
-          : ['ok', `C'est faisable : il te resterait ${money(-p.gap)} par mois.`]);
-        lines.push(['', `À ${money(p.monthly)}/mois, objectif atteint vers ${monthName(p.eta).toLowerCase()}.`]);
-      }
-      if (p.gap > 0 && p.capacity > 0) lines.push(['', `Avec toute ta marge (${money(p.capacity)}/mois) : vers ${monthName(p.etaCapacity).toLowerCase()}.`]);
-    }
+    const lines = projectResults(probe, p);
     els.envPlan.hidden = false;
     fill(els.envPlan, lines.map(([tone, text]) => h('p', { dataset: tone ? { tone } : null, text })));
     if (input.mode === 'active' && p.gap > 0 && input.saved < input.target) {
@@ -3376,6 +3615,14 @@
     els.envDeadline.value = env && env.kind === 'project' && env.deadline ? env.deadline : '';
     setRadio(els.envForm, 'env-mode', env && env.kind === 'project' ? env.mode : 'active');
     setRadio(els.envForm, 'env-start', 'pay');
+    renderChoices();
+    const pj = env && env.kind === 'project' ? env : {};
+    setRadio(els.envForm, 'env-goal', pj.goalType || 'monthly');
+    setRadio(els.envForm, 'env-timing', pj.timing || 'pay');
+    setRadio(els.envForm, 'env-priority', String(pj.priority || 2));
+    setRadio(els.envForm, 'env-color', pj.color || 'amber');
+    setRadio(els.envForm, 'env-icon', pj.icon || 'target');
+    els.envMore.open = false;
     els.envSubmit.textContent = env ? 'Enregistrer' : 'Créer';
     els.envExtra.hidden = !env;
     els.envReset.hidden = !env || env.kind !== 'spend';
@@ -3393,7 +3640,7 @@
     updateEnvHint();
   });
 
-  [els.envName, els.envMax, els.envTarget, els.envSaved, els.envMonthly, els.envDeadline, els.envPeriod, els.envModeWrap, els.envStartWrap].forEach((el) => {
+  [els.envName, els.envMax, els.envTarget, els.envSaved, els.envMonthly, els.envDeadline, els.envPeriod, els.envModeWrap, els.envStartWrap, els.envGoal].forEach((el) => {
     const on = () => {
       hideError(els.envError);
       updateEnvHint();
@@ -3446,6 +3693,345 @@
     if (!confirmed) return;
     const res = deleteEnvelope(env.id);
     if (res.ok) toast(res.data.reinjected > 0 ? `${money(res.data.reinjected)} retournent dans ton reste à vivre.` : 'Supprimé.');
+  });
+
+  // ——— Onglet Projets ———
+  const pctOf = (e) => (e.target > 0 ? Math.round(Math.min(1, e.saved / e.target) * 100) : 0);
+
+  function projectRow(e) {
+    const p = projectPlan(e);
+    const done = projectDone(e);
+    const status = e.category === 'wish'
+      ? e.boughtAt ? `Acheté le ${shortDate(e.boughtAt)}` : `${money(e.target)}${e.saved ? ` · ${money(e.saved)} de côté` : ''}`
+      : done ? (e.goalType === 'fill' ? 'Réserve pleine' : 'Objectif atteint')
+        : p.monthly > 0 && p.eta ? `${money(p.monthly)}/mois · vers ${monthName(p.eta).toLowerCase()}${p.late ? ' (en retard)' : ''}`
+          : e.deadline ? `Pour ${monthName(e.deadline).toLowerCase()}` : 'Mise à définir';
+    return h('button', { type: 'button', class: 'proj-row', dataset: { id: e.id, color: e.color || 'amber', state: done ? 'done' : e.mode } },
+      h('span', { class: 'proj-icon', 'aria-hidden': 'true' }, icon(e.icon || 'target')),
+      h('span', { class: 'proj-body' },
+        h('span', { class: 'proj-line' }, h('strong', { text: e.name }),
+          e.mode === 'plan' && !done && e.category !== 'wish' ? h('em', { class: 'badge', text: 'Plan' }) : null,
+          e.priority === 1 && !done ? h('em', { class: 'badge', dataset: { tone: 'bad' }, text: 'Priorité' }) : null),
+        h('small', { text: status }),
+        e.category === 'wish' ? null : h('span', { class: 'proj-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pctOf(e)), 'aria-label': `${e.name} : ${pctOf(e)} %` },
+          h('i', { style: `width:${pctOf(e)}%` }))),
+      h('span', { class: 'proj-amount' }, h('b', { text: money(e.saved) }), h('small', { text: e.category === 'wish' ? '' : `sur ${money(e.target)}` })));
+  }
+
+  function renderProjects() {
+    const sort = ui.projectSort || 'date';
+    els.pSort.querySelectorAll('[data-sort]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.sort === sort)));
+    const all = state.envelopes.filter((e) => e.kind === 'project');
+    const by = {
+      date: (a, b) => (a.deadline || '9999') < (b.deadline || '9999') ? -1 : (a.deadline || '9999') > (b.deadline || '9999') ? 1 : a.priority - b.priority,
+      priority: (a, b) => a.priority - b.priority || ((a.deadline || '9999') < (b.deadline || '9999') ? -1 : 1),
+      progress: (a, b) => pctOf(b) - pctOf(a)
+    }[sort];
+    const projects = all.filter((e) => e.category !== 'wish');
+    const groups = [
+      ['En cours', 'play', projects.filter((e) => e.mode === 'active' && !projectDone(e))],
+      ['Plans et simulations', 'flask-conical', projects.filter((e) => e.mode === 'plan' && !projectDone(e))],
+      ['Atteints', 'trophy', projects.filter((e) => projectDone(e))]
+    ].filter(([, , list]) => list.length);
+    fill(els.pGroups, groups.length
+      ? groups.map(([title, ic, list]) => h('section', { class: 'proj-group' },
+        h('div', { class: 'section-head' }, h('h2', {}, icon(ic), title), h('span', { class: 'count', text: String(list.length) })),
+        h('div', { class: 'proj-list' }, [...list].sort(by).map(projectRow))))
+      : h('div', { class: 'empty' },
+        h('span', { class: 'empty-icon', 'aria-hidden': 'true' }, icon('target')),
+        h('h3', { text: 'Aucun projet pour l\'instant' }),
+        h('p', { text: 'Maison, moto, voyage, fonds d\'urgence : fixe un objectif, choisis une mise ou une date, et simule avant de te lancer.' })));
+    const advice = projectAdvice();
+    fill(els.pAdvice, advice.map((a) => h('div', { class: 'insight', dataset: { tone: 'info' } },
+      h('span', { class: 'insight-icon', 'aria-hidden': 'true' }, icon(a.icon)),
+      h('span', { class: 'insight-text' }, h('strong', { text: 'Conseil' }), h('span', { text: a.text })))));
+    els.pAdvice.hidden = !advice.length;
+    const wishes = all.filter((e) => e.category === 'wish').sort((a, b) => Number(Boolean(a.boughtAt)) - Number(Boolean(b.boughtAt)) || a.target - b.target);
+    fill(els.wishList, wishes.length ? wishes.map(projectRow) : h('p', { class: 'muted small', text: 'Rien pour l\'instant.' }));
+    flushIcons();
+  }
+
+  els.pSort.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sort]');
+    if (!b) return;
+    ui.projectSort = b.dataset.sort;
+    renderProjects();
+  });
+  els.pNew.addEventListener('click', () => openEnv({ kind: 'project' }));
+  [els.pGroups, els.wishList].forEach((list) => list.addEventListener('click', (e) => {
+    const row = e.target.closest('.proj-row');
+    if (row) openProject(row.dataset.id);
+  }));
+
+  els.wishForm.addEventListener('submit', guard(() => {
+    const res = addWish({ name: els.wishName.value, price: parseAmount(els.wishPrice.value) });
+    if (!res.ok) return showError(els.wishError, res.error);
+    hideError(els.wishError);
+    els.wishName.value = '';
+    els.wishPrice.value = '';
+    const id = res.data.id;
+    toast(`« ${res.data.name} » ajouté à ta liste d'envies.`, { action: { label: 'Annuler', run: () => { deleteEnvelope(id); } } });
+  }));
+
+  // ——— Fiche projet ———
+  const pj = { id: null };
+  const pjEnv = () => findEnv(pj.id);
+  const bpOf = (raw) => {
+    const s = String(raw ?? '').replace(/[\s%]/g, '').replace(',', '.');
+    if (s === '') return 0;
+    if (!/^-?\d{1,2}(\.\d{1,2})?$/.test(s)) return null;
+    const [int, dec = ''] = s.replace('-', '').split('.');
+    const bp = Number(int) * 100 + Number((dec + '00').slice(0, 2));
+    return s.startsWith('-') ? -bp : bp;
+  };
+  const bpText = (bp) => (bp ? (bp / 100).toFixed(bp % 100 === 0 ? 0 : 2).replace('.', ',') : '');
+
+  function openProject(id) {
+    const e = findEnv(id);
+    if (!e || e.kind !== 'project') return;
+    pj.id = id;
+    const sim = e.sim || {};
+    const sc = simScenarios(e);
+    els.simPrudent.value = toInputValue(sc.prudent);
+    els.simReal.value = toInputValue(sc.real);
+    els.simAmbitious.value = toInputValue(sc.ambitious);
+    els.simYield.value = bpText(sim.yieldBp || 0);
+    els.simInflation.value = bpText(sim.inflationBp || 0);
+    els.simRaise.value = sim.raise ? toInputValue(sim.raise) : '';
+    els.simRaiseFrom.value = sim.raiseFrom || '';
+    els.pjNotes.value = e.notes || '';
+    els.pjWithdrawForm.hidden = true;
+    els.pjWithdrawAmount.value = '';
+    els.pjWithdrawNote.value = '';
+    els.pjCheckInput.value = '';
+    hideError(els.pjError);
+    hideError(els.simError);
+    renderProjectSheet();
+    openDialog(els.dlgProject);
+  }
+
+  function renderProjectSheet() {
+    const e = pjEnv();
+    if (!e) return closeDialog(els.dlgProject);
+    const p = projectPlan(e);
+    els.dlgProject.dataset.color = e.color || 'amber';
+    fill(els.pjIcon, icon(e.icon || 'target'));
+    els.pjTitle.textContent = e.name;
+    els.pjSub.textContent = [
+      e.category === 'wish' ? 'Envie' : GOAL_TYPES[e.goalType || 'monthly'].label,
+      e.mode === 'plan' ? 'Plan (rien n\'est réservé)' : `Actif · mis de côté ${(TIMINGS[e.timing] || TIMINGS.pay).text}`,
+      `Priorité ${PRIORITIES[e.priority || 2].toLowerCase()}`
+    ].join(' · ');
+    fill(els.pjProgress,
+      h('div', { class: 'pj-figures' }, h('strong', { text: money(e.saved) }), h('span', { text: e.safety ? `objectif conseillé ${money(e.target)}` : `sur ${money(e.target)} · ${pctOf(e)} %` })),
+      h('div', { class: 'proj-bar big', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pctOf(e)), 'aria-label': `${e.name} : ${pctOf(e)} %` }, h('i', { style: `width:${pctOf(e)}%` })));
+    els.pjBuy.hidden = e.category !== 'wish' || Boolean(e.boughtAt);
+    els.pjWithdraw.hidden = e.saved <= 0;
+    fill(els.pjResults, projectResults(e, p).map(([tone, text]) => h('p', { dataset: tone ? { tone } : null, text })));
+    els.pjSimSection.hidden = e.category === 'wish';
+    if (e.category !== 'wish') renderSimulation();
+    renderChecklist();
+    renderProjectHistory();
+    flushIcons();
+  }
+
+  function simInput() {
+    const read = (el) => (el.value.trim() === '' ? 0 : parseAmount(el.value));
+    const vals = { prudent: read(els.simPrudent), real: read(els.simReal), ambitious: read(els.simAmbitious), raise: read(els.simRaise) };
+    const yieldBp = bpOf(els.simYield.value);
+    const inflationBp = bpOf(els.simInflation.value);
+    if (Object.values(vals).some((v) => v === null)) return fail('Indique des montants valides (ex : 150).');
+    if (yieldBp === null || inflationBp === null) return fail('Indique un pourcentage valide (ex : 2,5).');
+    return ok({
+      yieldBp, inflationBp, raise: vals.raise, raiseFrom: isMonthKey(els.simRaiseFrom.value) ? els.simRaiseFrom.value : null,
+      scenarios: { prudent: vals.prudent, real: vals.real, ambitious: vals.ambitious }, compareId: els.simCompare.value || null
+    });
+  }
+
+  function renderSimulation() {
+    const e = pjEnv();
+    const others = state.envelopes.filter((x) => x.kind === 'project' && x.id !== e.id && x.category !== 'wish');
+    const compareId = (e.sim && e.sim.compareId) || '';
+    fill(els.simCompare, h('option', { value: '', text: 'Aucun' }), others.map((x) => h('option', { value: x.id, text: x.name })));
+    els.simCompare.value = others.some((x) => x.id === compareId) ? compareId : '';
+    const runs = runScenarios(e);
+    const capacity = projectPlan(e).capacity;
+    const label = { prudent: 'Prudent', real: 'Réaliste', ambitious: 'Ambitieux' };
+    const cmp = findEnv(els.simCompare.value);
+    const cmpRun = cmp ? runScenarios(cmp).real : null;
+    fill(els.simOut, Object.entries(runs).map(([k, r]) => h('div', { class: 'sim-card', dataset: { scenario: k } },
+      h('span', { text: label[k] }),
+      h('strong', { text: r.reached ? capitalize(monthName(r.reached).toLowerCase()) : r.monthly > 0 ? 'Au-delà de 50 ans' : 'Mise à définir' }),
+      h('small', { text: `${money(r.monthly)}/mois${r.months ? ` · ${durationLabel(r.months)}` : ''}${r.monthly > capacity ? ' · au-delà de ta marge' : ''}` }))),
+    cmpRun ? h('div', { class: 'sim-card', dataset: { scenario: 'compare' } },
+      h('span', { text: `« ${cmp.name} »` }),
+      h('strong', { text: cmpRun.reached ? capitalize(monthName(cmpRun.reached).toLowerCase()) : 'Non atteint' }),
+      h('small', { text: `réaliste, ${money(cmpRun.monthly)}/mois` })) : null);
+    els.simChart.innerHTML = simChartSvg(runs, cmpRun);
+  }
+
+  // Courbes d'épargne des 3 scénarios (et d'un projet comparé) jusqu'à l'objectif.
+  function simChartSvg(runs, cmp) {
+    const W = 640;
+    const H = 220;
+    const pl = 58;
+    const pr = 14;
+    const pt = 14;
+    const pb = 26;
+    const series = Object.entries(runs).map(([k, r]) => [k, r.points]);
+    if (cmp) series.push(['compare', cmp.points]);
+    const len = Math.min(240, Math.max(2, ...series.map(([, pts]) => pts.length)));
+    const hi = Math.max(1, ...series.flatMap(([, pts]) => pts.slice(0, len).map((q) => Math.max(q.bal, q.goal))));
+    const x = (i) => pl + (i / Math.max(1, len - 1)) * (W - pl - pr);
+    const y = (v) => pt + (1 - v / hi) * (H - pt - pb);
+    const path = (pts, f) => pts.slice(0, len).map((q, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(f(q)).toFixed(1)}`).join(' ');
+    const short = (v) => fmtInt.format(Math.round(v / 100));
+    const goal = runs.real.points;
+    const lines = series.map(([k, pts]) => `<path class="sim-line sim-${k}" d="${path(pts, (q) => q.bal)}"/>`).join('');
+    const firstKey = goal[0].key;
+    const ticks = [0, Math.floor((len - 1) / 2), len - 1].map((i) => `<text class="c-label" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${monthShort(shiftMonth(firstKey, i))} ${shiftMonth(firstKey, i).slice(2, 4)}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Progression de l'épargne selon les scénarios" preserveAspectRatio="xMidYMid meet">
+      <line class="c-grid" x1="${pl}" x2="${W - pr}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>
+      <text class="c-label" x="${pl - 8}" y="${(y(hi) + 4).toFixed(1)}" text-anchor="end">${short(hi)}</text>
+      <text class="c-label" x="${pl - 8}" y="${(y(0) + 4).toFixed(1)}" text-anchor="end">0</text>
+      <path class="sim-goal" d="${path(goal, (q) => q.goal)}"/>
+      ${lines}${ticks}
+    </svg>`;
+  }
+
+  const saveSim = () => {
+    const e = pjEnv();
+    const res = simInput();
+    if (!res.ok) return showError(els.simError, res.error);
+    hideError(els.simError);
+    e.sim = cleanSim(res.data);
+    save();
+    renderSimulation();
+  };
+  [els.simPrudent, els.simReal, els.simAmbitious, els.simYield, els.simInflation, els.simRaise, els.simRaiseFrom].forEach((el) => el.addEventListener('input', saveSim));
+  els.simCompare.addEventListener('change', saveSim);
+
+  let notesTimer = null;
+  els.pjNotes.addEventListener('input', () => {
+    clearTimeout(notesTimer);
+    notesTimer = setTimeout(() => { const e = pjEnv(); if (e) { e.notes = els.pjNotes.value.slice(0, NOTES_MAX); save(); } }, 400);
+  });
+  els.pjNotes.addEventListener('blur', () => { const e = pjEnv(); if (e && e.notes !== els.pjNotes.value) updateProjectInfo(e.id, { notes: els.pjNotes.value }); });
+
+  // Un lien (http/https) dans une étape devient cliquable ; le reste reste du texte.
+  function linkify(text) {
+    return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) => (i % 2
+      ? h('a', { href: part, target: '_blank', rel: 'noopener noreferrer', text: part.replace(/^https?:\/\//, '').slice(0, 40) })
+      : part));
+  }
+
+  function renderChecklist() {
+    const e = pjEnv();
+    const list = e.checklist || [];
+    const done = list.filter((c) => c.done).length;
+    fill(els.pjChecklist, list.length
+      ? [list.map((c) => h('li', { class: 'check-item', dataset: { id: c.id, done: String(c.done) } },
+        h('label', {}, h('input', { type: 'checkbox', class: 'check-toggle', checked: c.done, 'aria-label': c.text }), h('span', {}, linkify(c.text))),
+        h('button', { type: 'button', class: 'icon-btn small check-del', 'aria-label': `Supprimer « ${c.text} »` }, icon('x')))),
+      h('li', { class: 'check-count muted small', text: `${done}/${list.length} fait${done > 1 ? 's' : ''}` })]
+      : h('li', { class: 'muted small', text: 'Ajoute les étapes, la liste d\'achats ou des liens utiles.' }));
+    els.pjChecklist.querySelectorAll('.check-toggle').forEach((box) => { box.checked = box.closest('li').dataset.done === 'true'; });
+  }
+
+  els.pjCheckForm.addEventListener('submit', guard(() => {
+    const e = pjEnv();
+    const text = cleanText(els.pjCheckInput.value, 120);
+    if (!e || !text) return;
+    updateProjectInfo(e.id, { checklist: [...(e.checklist || []), { id: uid(), text, done: false }] });
+    els.pjCheckInput.value = '';
+    renderChecklist();
+    flushIcons();
+  }));
+
+  els.pjChecklist.addEventListener('click', (ev) => {
+    const e = pjEnv();
+    const li = ev.target.closest('.check-item');
+    if (!e || !li) return;
+    if (ev.target.closest('.check-del')) {
+      const removed = e.checklist.find((c) => c.id === li.dataset.id);
+      const index = e.checklist.indexOf(removed);
+      updateProjectInfo(e.id, { checklist: e.checklist.filter((c) => c.id !== li.dataset.id) });
+      renderChecklist();
+      flushIcons();
+      toast('Étape supprimée.', { action: { label: 'Annuler', run: () => { const list = [...pjEnv().checklist]; list.splice(index, 0, removed); updateProjectInfo(e.id, { checklist: list }); renderChecklist(); flushIcons(); } } });
+    } else if (ev.target.closest('.check-toggle')) {
+      updateProjectInfo(e.id, { checklist: e.checklist.map((c) => (c.id === li.dataset.id ? { ...c, done: !c.done } : c)) });
+      renderChecklist();
+      flushIcons();
+    }
+  });
+
+  function renderProjectHistory() {
+    const e = pjEnv();
+    const txs = state.transactions.filter((t) => (t.type === 'deposit' || t.type === 'withdraw') && t.envId === e.id).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.ts - a.ts));
+    fill(els.pjHistory, txs.length
+      ? h('div', { class: 'tx-rows' }, txs.map((t) => h('button', { type: 'button', class: 'tx-row', dataset: { id: t.id, type: t.type } },
+        h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
+        h('span', { class: 'tx-body' }, h('strong', { text: t.note || (t.type === 'withdraw' ? 'Retrait' : t.src === 'close' ? 'Reste de clôture' : t.covers ? `Mise ${ofMonth(t.covers)}` : 'Versement') }),
+          h('small', { text: `${shortDate(t.date)}${t.covers ? ' · compté comme la mise du mois' : ''}${t.src === 'close' ? ' · clôture' : ''}` })),
+        h('span', { class: 'tx-amount', text: `${t.type === 'withdraw' ? '−' : '+'}${money(t.amount)}` }))))
+      : h('p', { class: 'muted small', text: e.mode === 'active' ? 'Les mises automatiques sont ajoutées à chaque clôture de mois. Les versements exceptionnels apparaîtront ici.' : 'Aucun versement pour l\'instant.' }));
+  }
+
+  els.pjHistory.addEventListener('click', async (ev) => {
+    const row = ev.target.closest('.tx-row');
+    const tx = row && state.transactions.find((t) => t.id === row.dataset.id);
+    if (!tx) return;
+    if (tx.type === 'deposit' && tx.src !== 'close') {
+      closeDialog(els.dlgProject);
+      return openTx(tx);
+    }
+    const confirmed = await confirmAction({ title: tx.type === 'withdraw' ? 'Annuler ce retrait ?' : 'Supprimer ce versement ?', text: `${money(tx.amount)} ${tx.type === 'withdraw' ? 'reviennent dans' : 'sortent de'} « ${pjEnv().name} ».`, confirmLabel: 'Confirmer' });
+    if (!confirmed) return;
+    const res = deleteTransaction(tx.id);
+    if (res.ok) {
+      renderProjectSheet();
+      toast('Opération supprimée.', { action: { label: 'Annuler', run: () => { restoreTransaction(res.data); renderProjectSheet(); } } });
+    }
+  });
+
+  els.pjDeposit.addEventListener('click', () => {
+    const e = pjEnv();
+    closeDialog(els.dlgProject);
+    openAdd({ mode: 'deposit', projectId: e.id });
+  });
+  els.pjEdit.addEventListener('click', () => {
+    const e = pjEnv();
+    closeDialog(els.dlgProject);
+    openEnv({ env: e });
+  });
+  els.pjWithdraw.addEventListener('click', () => {
+    els.pjWithdrawForm.hidden = !els.pjWithdrawForm.hidden;
+    if (!els.pjWithdrawForm.hidden) requestAnimationFrame(() => els.pjWithdrawAmount.focus());
+  });
+  els.pjWithdrawForm.addEventListener('submit', guard(() => {
+    const e = pjEnv();
+    const res = addTransaction({ type: 'withdraw', envId: e.id, amount: parseAmount(els.pjWithdrawAmount.value), note: els.pjWithdrawNote.value, date: clock.today() });
+    if (!res.ok) return showError(els.pjError, res.error);
+    hideError(els.pjError);
+    els.pjWithdrawForm.hidden = true;
+    els.pjWithdrawAmount.value = '';
+    els.pjWithdrawNote.value = '';
+    renderProjectSheet();
+    const t = res.data;
+    toast(`${money(t.amount)} retirés de « ${e.name} »${e.goalType === 'fill' ? ' : la mise reprendra pour la remplir' : ''}.`, { action: { label: 'Annuler', run: () => { deleteTransaction(t.id); renderProjectSheet(); } } });
+  }));
+  els.pjBuy.addEventListener('click', async () => {
+    const e = pjEnv();
+    updateProjectInfo(e.id, { boughtAt: clock.today() });
+    closeDialog(els.dlgProject);
+    const add = await confirmAction({ title: `« ${e.name} » est acheté`, text: `Veux-tu ajouter la dépense de ${money(e.target)} au journal ?`, confirmLabel: 'Ajouter la dépense' });
+    if (add) {
+      openAdd({ mode: 'expense' });
+      els.txAmount.value = toInputValue(e.target);
+      els.txLabel.value = e.name;
+      syncTxForm();
+    } else toast('Bien noté.', { action: { label: 'Annuler', run: () => updateProjectInfo(e.id, { boughtAt: null }) } });
   });
 
   // ——— Clôture du mois ———
@@ -4049,7 +4635,8 @@
     if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
     if (e.type === 'keydown') e.preventDefault();
     const env = findEnv(card.dataset.id);
-    if (env) openEnv({ env });
+    if (env && env.kind === 'project') openProject(env.id);
+    else if (env) openEnv({ env });
   }
   [els.spendGrid, els.projectGrid].forEach((grid) => {
     grid.addEventListener('click', cardOpen);
@@ -4074,7 +4661,8 @@
     }
     const row = e.target.closest('.tx-row');
     const tx = row && state.transactions.find((t) => t.id === row.dataset.id);
-    if (tx) openTx(tx);
+    if (tx && tx.type === 'withdraw') openProject(tx.envId);
+    else if (tx) openTx(tx);
   });
 
   els.rMode.addEventListener('change', () => {
@@ -4110,7 +4698,8 @@
     if (!row) return;
     if (row.dataset.tx) {
       const tx = state.transactions.find((t) => t.id === row.dataset.tx);
-      if (tx) openTx(tx);
+      if (tx && tx.type === 'withdraw') openProject(tx.envId);
+    else if (tx) openTx(tx);
     } else if (row.dataset.rule) {
       const rule = findRule(row.dataset.rule);
       if (rule) openRule(rule);
@@ -4212,7 +4801,7 @@
       openAdd({ mode: 'expense' });
       return;
     }
-    const tab = hash === 'bilan' ? 'report' : TABS.includes(hash) ? hash : null;
+    const tab = hash === 'bilan' ? 'report' : hash === 'projets' ? 'projects' : TABS.includes(hash) ? hash : null;
     if (tab) setTab(tab, { updateHash: false });
   }
   window.addEventListener('hashchange', applyHash);
@@ -4277,10 +4866,12 @@
     derive, cashflow, forecast, upcomingEvents, computeInsights, parseStatement, parseReceipt, receiptDetail, runRollover,
     postRecurring, occurrences, periodWindow, envRow, projectPlan, applyTemplate, render, setTab, guessEnvelope,
     cycleStart, cycleEnd, budgetKey, currentMonth, pendingClosings, closingDefaults, nextPayMonth,
+    projectResults, simulate, runScenarios, projectAdvice, monthlyOf, projectContribution,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
-      closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData
+      closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData,
+      addWish, updateProjectInfo, openProject
     }
   };
 

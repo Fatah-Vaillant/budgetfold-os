@@ -142,6 +142,7 @@
           <button type="button" class="tab" role="tab" data-tab="home" aria-selected="true"><i data-lucide="layout-grid"></i><span>Accueil</span></button>
           <button type="button" class="tab" role="tab" data-tab="journal" aria-selected="false"><i data-lucide="receipt"></i><span>Journal</span></button>
           <button type="button" class="tab-add" id="nav-add" aria-label="Ajouter une opération"><i data-lucide="plus"></i></button>
+          <button type="button" class="tab" role="tab" data-tab="projects" aria-selected="false"><i data-lucide="target"></i><span>Projets</span></button>
           <button type="button" class="tab" role="tab" data-tab="agenda" aria-selected="false"><i data-lucide="calendar-days"></i><span>Agenda</span></button>
           <button type="button" class="tab" role="tab" data-tab="report" aria-selected="false"><i data-lucide="trending-up"></i><span>Bilan</span></button>
         </nav>
@@ -198,6 +199,41 @@
               <h3>Rien à afficher</h3>
               <p>Aucune opération pour ce mois et ce filtre. Touche le bouton + pour en ajouter une.</p>
             </div>
+          </section>
+
+          <section class="view" data-view="projects" role="tabpanel" hidden>
+            <header class="view-head">
+              <h1>Projets</h1>
+              <p>Tes projets, tes simulations et tes envies.</p>
+            </header>
+            <div class="toolbar proj-toolbar">
+              <div class="chips" id="p-sort" role="radiogroup" aria-label="Trier par">
+                <button type="button" class="chip" role="radio" data-sort="date" aria-checked="true"><span>Par date</span></button>
+                <button type="button" class="chip" role="radio" data-sort="priority" aria-checked="false"><span>Par priorité</span></button>
+                <button type="button" class="chip" role="radio" data-sort="progress" aria-checked="false"><span>Par avancement</span></button>
+              </div>
+              <button type="button" class="btn primary compact" id="p-new"><i data-lucide="plus"></i>Nouveau projet</button>
+            </div>
+            <div class="insights" id="p-advice"></div>
+            <div id="p-groups"></div>
+            <article class="card pad wish-card">
+              <div class="card-head">
+                <div>
+                  <h2>Liste d'envies</h2>
+                  <p class="muted">Les petits achats qui te font envie. Note-les, laisse passer quelques jours, achète quand ton budget le permet.</p>
+                </div>
+              </div>
+              <form class="wish-form" id="wish-form" novalidate>
+                <input id="wish-name" type="text" maxlength="40" autocomplete="off" placeholder="Ex : casque audio" aria-label="Nom de l'envie">
+                <div class="money-input">
+                  <input id="wish-price" type="text" inputmode="decimal" autocomplete="off" placeholder="Prix" aria-label="Prix">
+                  <span>€</span>
+                </div>
+                <button type="submit" class="btn primary compact"><i data-lucide="plus"></i>Ajouter</button>
+              </form>
+              <p class="field-error" id="wish-error" role="alert" hidden></p>
+              <div class="wish-list" id="wish-list"></div>
+            </article>
           </section>
 
           <section class="view" data-view="agenda" role="tabpanel" hidden>
@@ -443,6 +479,18 @@
           <input type="radio" name="env-mode" id="env-mode-plan" value="plan">
           <label for="env-mode-plan"><i data-lucide="flask-conical"></i>Plan (simulation)</label>
         </div>
+        <div class="field">
+          <span class="field-label" id="env-goal-label">Type d'objectif</span>
+          <div class="segmented three" id="env-goal" role="radiogroup" aria-labelledby="env-goal-label">
+            <input type="radio" name="env-goal" id="env-goal-monthly" value="monthly" checked>
+            <label for="env-goal-monthly"><i data-lucide="repeat"></i>X € par mois</label>
+            <input type="radio" name="env-goal" id="env-goal-date" value="date">
+            <label for="env-goal-date"><i data-lucide="calendar-check"></i>Pour une date</label>
+            <input type="radio" name="env-goal" id="env-goal-fill" value="fill">
+            <label for="env-goal-fill"><i data-lucide="battery-medium"></i>Réserve</label>
+          </div>
+          <p class="hint small-hint" id="env-goal-hint"></p>
+        </div>
         <div class="field" id="env-start-field" hidden>
           <span class="field-label" id="env-start-label">Première mise</span>
           <div class="segmented" id="env-start-wrap" role="radiogroup" aria-labelledby="env-start-label">
@@ -469,8 +517,8 @@
           </div>
         </div>
         <div class="field-row">
-          <div class="field">
-            <label for="env-deadline">Pour quand ? (facultatif)</label>
+          <div class="field" id="env-deadline-field">
+            <label for="env-deadline" id="env-deadline-label">Pour quand ? (facultatif)</label>
             <input id="env-deadline" type="month" placeholder="AAAA-MM">
           </div>
           <div class="field">
@@ -481,6 +529,39 @@
             </div>
           </div>
         </div>
+        <details class="detail-box" id="env-more">
+          <summary>Versement, priorité, couleur et icône</summary>
+          <div class="field">
+            <span class="field-label" id="env-timing-label">La mise est mise de côté</span>
+            <div class="segmented three" id="env-timing" role="radiogroup" aria-labelledby="env-timing-label">
+              <input type="radio" name="env-timing" id="env-timing-pay" value="pay" checked>
+              <label for="env-timing-pay"><i data-lucide="banknote"></i>Jour de paie</label>
+              <input type="radio" name="env-timing" id="env-timing-first" value="first">
+              <label for="env-timing-first"><i data-lucide="calendar"></i>Le 1er</label>
+              <input type="radio" name="env-timing" id="env-timing-end" value="end">
+              <label for="env-timing-end"><i data-lucide="calendar-clock"></i>Fin de mois</label>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="env-priority-label">Priorité</span>
+            <div class="segmented three" id="env-priority" role="radiogroup" aria-labelledby="env-priority-label">
+              <input type="radio" name="env-priority" id="env-priority-1" value="1">
+              <label for="env-priority-1">Haute</label>
+              <input type="radio" name="env-priority" id="env-priority-2" value="2" checked>
+              <label for="env-priority-2">Normale</label>
+              <input type="radio" name="env-priority" id="env-priority-3" value="3">
+              <label for="env-priority-3">Basse</label>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="env-color-label">Couleur</span>
+            <div class="swatches" id="env-color" role="radiogroup" aria-labelledby="env-color-label"></div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="env-icon-label">Icône</span>
+            <div class="icon-grid" id="env-icon" role="radiogroup" aria-labelledby="env-icon-label"></div>
+          </div>
+        </details>
       </div>
       <div class="plan-box" id="env-plan" hidden></div>
       <p class="hint" id="env-hint"></p>
@@ -495,6 +576,103 @@
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-project" aria-labelledby="pj-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div class="pj-head">
+          <span class="pj-icon" id="pj-icon" aria-hidden="true"></span>
+          <div>
+            <h2 id="pj-title">Projet</h2>
+            <p id="pj-sub"></p>
+          </div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="pj-progress" id="pj-progress"></div>
+      <div class="pj-actions">
+        <button type="button" class="btn primary compact" id="pj-deposit"><i data-lucide="piggy-bank"></i>Verser</button>
+        <button type="button" class="btn ghost compact" id="pj-withdraw"><i data-lucide="battery-low"></i>Retirer</button>
+        <button type="button" class="btn ghost compact" id="pj-buy" hidden><i data-lucide="shopping-bag"></i>C'est acheté</button>
+        <button type="button" class="btn ghost compact" id="pj-edit"><i data-lucide="pencil"></i>Modifier</button>
+      </div>
+      <form class="pj-inline" id="pj-withdraw-form" hidden novalidate>
+        <div class="money-input">
+          <input id="pj-withdraw-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="Montant" aria-label="Montant retiré">
+          <span>€</span>
+        </div>
+        <input id="pj-withdraw-note" type="text" maxlength="80" autocomplete="off" placeholder="Pour quoi ? (ex : vidange)" aria-label="Pour quoi">
+        <button type="submit" class="btn primary compact">Retirer</button>
+      </form>
+      <p class="field-error" id="pj-error" role="alert" hidden></p>
+
+      <section class="pj-section">
+        <h3>Résultats</h3>
+        <div class="plan-box" id="pj-results"></div>
+      </section>
+
+      <section class="pj-section" id="pj-sim-section">
+        <h3>Simulateur</h3>
+        <p class="muted small">Teste plusieurs mises. Rendement, inflation et hausse sont à saisir toi-même : rien n'est supposé à ta place.</p>
+        <div class="sim-grid">
+          <div class="field">
+            <label for="sim-prudent">Prudent (€/mois)</label>
+            <div class="money-input"><input id="sim-prudent" type="text" inputmode="decimal" autocomplete="off"><span>€</span></div>
+          </div>
+          <div class="field">
+            <label for="sim-real">Réaliste (€/mois)</label>
+            <div class="money-input"><input id="sim-real" type="text" inputmode="decimal" autocomplete="off"><span>€</span></div>
+          </div>
+          <div class="field">
+            <label for="sim-ambitious">Ambitieux (€/mois)</label>
+            <div class="money-input"><input id="sim-ambitious" type="text" inputmode="decimal" autocomplete="off"><span>€</span></div>
+          </div>
+          <div class="field">
+            <label for="sim-yield">Rendement annuel (%)</label>
+            <input id="sim-yield" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="sim-inflation">Inflation annuelle (%)</label>
+            <input id="sim-inflation" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="sim-raise">Hausse prévue (€/mois)</label>
+            <div class="money-input"><input id="sim-raise" type="text" inputmode="decimal" autocomplete="off" placeholder="0"><span>€</span></div>
+          </div>
+          <div class="field">
+            <label for="sim-raise-from">À partir de</label>
+            <input id="sim-raise-from" type="month">
+          </div>
+          <div class="field">
+            <label for="sim-compare">Comparer avec</label>
+            <div class="select-wrap"><select id="sim-compare"></select></div>
+          </div>
+        </div>
+        <p class="field-error" id="sim-error" role="alert" hidden></p>
+        <div class="sim-out" id="sim-out"></div>
+        <div class="chart sim-chart" id="sim-chart"></div>
+      </section>
+
+      <section class="pj-section">
+        <h3>Notes</h3>
+        <textarea id="pj-notes" rows="4" maxlength="4000" placeholder="Liste d'achats, liens, idées, étapes…"></textarea>
+      </section>
+
+      <section class="pj-section">
+        <h3>Étapes et liste</h3>
+        <form class="pj-inline" id="pj-check-form" novalidate>
+          <input id="pj-check-input" type="text" maxlength="120" autocomplete="off" placeholder="Ajouter une étape, un achat ou un lien" aria-label="Nouvelle étape">
+          <button type="submit" class="btn ghost compact"><i data-lucide="plus"></i>Ajouter</button>
+        </form>
+        <ul class="checklist" id="pj-checklist"></ul>
+      </section>
+
+      <section class="pj-section">
+        <h3>Versements</h3>
+        <div id="pj-history"></div>
+      </section>
+    </div>
   </dialog>
 
   <dialog class="sheet wide" id="dlg-close" aria-labelledby="close-title">

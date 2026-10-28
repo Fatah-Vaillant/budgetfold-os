@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 3 — Projets et simulations**
+**Phase 4 — Justificatifs, tickets et règles**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -64,7 +64,27 @@ Décisions de la phase 2 :
 - Matelas de sécurité : projet Plan créé une fois (objectif de départ : 3 mois de salaire, modifiable ; il peut dépasser son objectif). S'il est supprimé, il ne revient pas.
 
 ## Phase 3 — Projets et simulations
-_À planifier._
+Plan :
+1. Données v4 des projets : `goalType` (monthly / date / fill), `timing`, `priority`, `color`, `icon`, `category` (project / wish), `notes`, `checklist`, `sim`, `boughtAt` ; opération `withdraw` (dépense payée par une réserve).
+2. Moteur : `monthlyOf` (mise recalculée pour une date), `projectResults` (résultats complets), `simulate` / `runScenarios` (centimes entiers, taux en points de base saisis), `projectAdvice`.
+3. Interface : onglet Projets (groupes, tri, conseils, liste d'envies), fiche projet (résultats, simulateur avec courbes et comparaison, notes, étapes avec liens, historique, verser / retirer / acheté), formulaire projet enrichi.
+
+- [x] Onglet dédié : groupes (en cours, plans, atteints), tri (date, priorité, avancement)
+- [x] Fiche projet : objectif, épargné, date, mise, moment du versement, priorité, couleur, icône, notes, étapes, historique des versements
+- [x] Types d'objectifs : X €/mois, pour une date (mise calculée chaque mois), réserve à remplir (retraits)
+- [x] Simulateur : 3 scénarios, rendement, inflation et hausse saisis par l'utilisateur, courbes, comparaison de deux projets
+- [x] Résultats toujours complets, « Compatible avec ta marge actuelle (après charges et enveloppes) », jamais « faisable »
+- [x] Conseils calculés (enveloppes sous-utilisées, réduction d'une enveloppe, toute la marge)
+- [x] Projets de toutes tailles + liste d'envies
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 3 :
+- Scénarios par défaut tirés des chiffres de l'utilisateur : prudent = min(mise, marge), réaliste = mise, ambitieux = toute la marge. Rendement, inflation et hausse valent 0 tant que l'utilisateur ne les saisit pas.
+- Taux stockés en points de base entiers (2,5 % = 250) et intérêts arrondis au centime à chaque mois : aucun flottant pour l'argent.
+- « Pour une date » : la mise est recalculée chaque mois (et tout de suite après un versement exceptionnel). La clôture verse la mise recalculée.
+- Une envie est un projet Plan (rien n'est réservé) de catégorie « wish » ; « C'est acheté » note la date et propose d'ajouter la dépense.
+- Le retrait d'une réserve ne touche pas le reste à vivre (l'argent était déjà mis de côté) ; la mise reprend jusqu'à remplir la réserve.
+- Sur l'accueil, toucher un projet ouvre sa fiche (avant : la feuille de modification, toujours accessible via « Modifier »).
 
 ## Phase 4 — Justificatifs, tickets et règles
 _À planifier._
