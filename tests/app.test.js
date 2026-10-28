@@ -38,17 +38,39 @@ const D = (p, key) => p.evaluate((k) => { const d = window.BudgetFold.derive(k);
   {
     const p = await H.open({});
     check('welcome opens on empty state', await p.evaluate(() => document.getElementById('dlg-welcome').open));
-    await p.evaluate(() => { document.getElementById('w-income').value = '2000'; document.getElementById('w-next').click(); });
-    await wait(200);
-    await p.evaluate(() => document.querySelector('[data-tpl="young"]').click());
+    check('départ vierge : aucun profil prédéfini proposé', !(await p.evaluate(() => document.querySelector('[data-tpl]'))));
+    const next = async () => { await p.evaluate(() => document.getElementById('w-next').click()); await wait(150); };
+    const setRow = (list, i, amount) => p.evaluate((o) => {
+      const row = document.querySelector(`#w-body .wiz-row[data-list="${o.list}"][data-i="${o.i}"]`);
+      row.querySelector('.wiz-amount').value = o.amount;
+    }, { list, i, amount });
+    await p.evaluate(() => { document.getElementById('w-income').value = '2000'; document.getElementById('w-payday').value = '1'; });
+    await next();
+    await setRow('incomes', 0, '150');
+    await next();
+    await setRow('charges', 0, '640');
+    await next();
+    await setRow('habits', 0, '300');
+    await next();
+    await p.evaluate(() => { const r = document.querySelector('#w-body .wiz-row[data-list="projects"]'); r.querySelector('.wiz-name').value = 'Permis'; r.querySelector('.wiz-amount').value = '1200'; });
+    await next();
+    await p.evaluate(() => { document.getElementById('w-balance').value = '520'; });
+    await next();
+    const recap = await p.evaluate(() => document.getElementById('w-body').textContent.replace(/[  ]/g, ' '));
+    check('questionnaire : récapitulatif (revenus 2 150 €, reste estimé 1 210 €)', /\+2 150 €/.test(recap) && /1 210 €/.test(recap), recap);
+    await next();
     await wait(300);
     const s = await S(p);
-    check('template: 4 recurring rules monthly', s.recurring.length === 4 && s.recurring.every((r) => r.freq === 'month' && r.type === 'expense'));
-    const loyer = s.transactions.find((t) => t.note === 'Loyer');
-    check('template: loyer of 1st already posted (today 15)', loyer && loyer.date === '2026-10-01' && loyer.recId, JSON.stringify(loyer));
+    check('questionnaire : APL et loyer à l\'échéancier, chaque mois', s.recurring.length === 2 && s.recurring.every((r) => r.freq === 'month'));
+    const loyer = s.transactions.find((t) => t.note === 'Loyer / crédit');
+    check('questionnaire : loyer du 1er déjà passé (on est le 15)', loyer && loyer.date === '2026-10-01' && loyer.recId, JSON.stringify(loyer));
+    const courses = s.envelopes.find((e) => e.name === 'Courses');
+    check('questionnaire : enveloppe Courses (icône et couleur devinées)', courses && courses.max === 30000 && courses.icon === 'shopping-cart' && courses.color === 'emerald', courses);
+    check('questionnaire : projet Permis en simulation + matelas de sécurité', s.envelopes.some((e) => e.name === 'Permis' && e.mode === 'plan') && s.envelopes.some((e) => e.safety));
+    check('questionnaire : solde du compte courant enregistré', s.accounts[0].opening === 52000 && s.prefs.cycle === 'pay');
     const d = await D(p);
-    check('template: free = income - allocated', d.free === d.income - d.allocated && d.free > 0, `${d.free}`);
-    check('template: welcome closed', !(await p.evaluate(() => document.getElementById('dlg-welcome').open)));
+    check('questionnaire : reste à vivre = 2 150 − 640 − 300', d.free === 215000 - 64000 - 30000, `${d.free}`);
+    check('questionnaire : accueil fermé, visite guidée lancée', !(await p.evaluate(() => document.getElementById('dlg-welcome').open)) && await p.evaluate(() => new Promise((r) => setTimeout(() => r(!document.getElementById('tour').hidden), 700))));
     await p.close();
   }
 

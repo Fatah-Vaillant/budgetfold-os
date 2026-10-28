@@ -72,7 +72,7 @@
 
           <div class="engine-main">
             <div class="remaining">
-              <span class="engine-label">Reste à vivre</span>
+              <span class="engine-label">Reste à vivre <button type="button" class="help-btn" data-help="reste" aria-label="Qu'est-ce que le reste à vivre ?">?</button></span>
               <strong class="remaining-amount" id="remaining-amount" data-negative="false">0 €</strong>
               <span class="remaining-sub" id="remaining-sub"></span>
             </div>
@@ -159,7 +159,7 @@
             <div class="insights" id="insights"></div>
 
             <div class="section-head">
-              <h2>Enveloppes</h2>
+              <h2>Enveloppes <button type="button" class="help-btn" data-help="enveloppe" aria-label="Qu'est-ce qu'une enveloppe ?">?</button></h2>
               <span class="count" id="count-spend">0</span>
               <button type="button" class="link-btn" id="add-spend"><i data-lucide="plus"></i>Nouvelle</button>
             </div>
@@ -171,7 +171,7 @@
             </div>
 
             <div class="section-head">
-              <h2>Projets</h2>
+              <h2>Projets <button type="button" class="help-btn" data-help="projet" aria-label="Qu'est-ce qu'un projet ?">?</button></h2>
               <span class="count" id="count-project">0</span>
               <button type="button" class="link-btn" id="add-project"><i data-lucide="plus"></i>Nouveau</button>
             </div>
@@ -283,7 +283,7 @@
             <article class="card pad" id="order-card">
               <div class="card-head">
                 <div>
-                  <h2>Ordre du mois</h2>
+                  <h2>Ordre du mois <button type="button" class="help-btn" data-help="ordre" aria-label="Pourquoi cet ordre ?">?</button></h2>
                   <p class="muted">Dans quel ordre l'argent arrive et repart.</p>
                 </div>
               </div>
@@ -432,11 +432,12 @@
         <div class="field">
           <label for="tx-date" id="tx-date-label">Date</label>
           <input id="tx-date" type="date">
+          <div class="date-chips" id="tx-date-chips"></div>
         </div>
         <div class="field" id="tx-repeat-field">
           <label for="tx-repeat">Répétition</label>
-          <div class="select-wrap">
-            <select id="tx-repeat">
+          <div class="native-wrap">
+            <select id="tx-repeat" class="select-native">
               <option value="once">Une seule fois</option>
               <option value="day">Chaque jour</option>
               <option value="week">Chaque semaine</option>
@@ -447,6 +448,7 @@
               <option value="year">Chaque année</option>
             </select>
           </div>
+          <div class="pills" id="tx-repeat-pills" role="radiogroup" aria-label="Répétition"></div>
         </div>
       </div>
       <div class="field" id="tx-until-field" hidden>
@@ -455,7 +457,7 @@
       </div>
       <details class="detail-box" id="tx-detail-box">
         <summary>Détail (articles, remarques)</summary>
-        <textarea id="tx-detail" rows="4" maxlength="1500" placeholder="Ex : liste des articles du ticket"></textarea>
+        <textarea id="tx-detail" aria-label="Détail : articles, remarques" rows="4" maxlength="1500" placeholder="Ex : liste des articles du ticket"></textarea>
       </details>
       <div class="field" id="tx-account-field" hidden>
         <span class="field-label" id="tx-account-label">Compte</span>
@@ -522,8 +524,8 @@
           </div>
           <div class="field">
             <label for="env-period">Par</label>
-            <div class="select-wrap">
-              <select id="env-period">
+            <div class="native-wrap">
+              <select id="env-period" class="select-native">
                 <option value="week">Semaine</option>
                 <option value="2weeks">2 semaines</option>
                 <option value="month" selected>Mois</option>
@@ -532,6 +534,7 @@
                 <option value="year">An</option>
               </select>
             </div>
+            <div class="pills" id="env-period-pills" role="radiogroup" aria-label="Période"></div>
           </div>
         </div>
       </div>
@@ -583,6 +586,7 @@
           <div class="field" id="env-deadline-field">
             <label for="env-deadline" id="env-deadline-label">Pour quand ? (facultatif)</label>
             <input id="env-deadline" type="month" placeholder="AAAA-MM">
+            <p class="month-hint" id="env-deadline-hint"></p>
           </div>
           <div class="field">
             <label for="env-monthly">Mise par mois</label>
@@ -592,40 +596,40 @@
             </div>
           </div>
         </div>
-        <details class="detail-box" id="env-more">
-          <summary>Versement, priorité, couleur et icône</summary>
-          <div class="field">
-            <span class="field-label" id="env-timing-label">La mise est mise de côté</span>
-            <div class="segmented three" id="env-timing" role="radiogroup" aria-labelledby="env-timing-label">
-              <input type="radio" name="env-timing" id="env-timing-pay" value="pay" checked>
-              <label for="env-timing-pay"><i data-lucide="banknote"></i>Jour de paie</label>
-              <input type="radio" name="env-timing" id="env-timing-first" value="first">
-              <label for="env-timing-first"><i data-lucide="calendar"></i>Le 1er</label>
-              <input type="radio" name="env-timing" id="env-timing-end" value="end">
-              <label for="env-timing-end"><i data-lucide="calendar-clock"></i>Fin de mois</label>
-            </div>
-          </div>
-          <div class="field">
-            <span class="field-label" id="env-priority-label">Priorité</span>
-            <div class="segmented three" id="env-priority" role="radiogroup" aria-labelledby="env-priority-label">
-              <input type="radio" name="env-priority" id="env-priority-1" value="1">
-              <label for="env-priority-1">Haute</label>
-              <input type="radio" name="env-priority" id="env-priority-2" value="2" checked>
-              <label for="env-priority-2">Normale</label>
-              <input type="radio" name="env-priority" id="env-priority-3" value="3">
-              <label for="env-priority-3">Basse</label>
-            </div>
-          </div>
-          <div class="field">
-            <span class="field-label" id="env-color-label">Couleur</span>
-            <div class="swatches" id="env-color" role="radiogroup" aria-labelledby="env-color-label"></div>
-          </div>
-          <div class="field">
-            <span class="field-label" id="env-icon-label">Icône</span>
-            <div class="icon-grid" id="env-icon" role="radiogroup" aria-labelledby="env-icon-label"></div>
-          </div>
-        </details>
       </div>
+      <details class="detail-box" id="env-more">
+        <summary>Versement, priorité, couleur et icône</summary>
+        <div class="field">
+          <span class="field-label" id="env-timing-label">La mise est mise de côté</span>
+          <div class="segmented three" id="env-timing" role="radiogroup" aria-labelledby="env-timing-label">
+            <input type="radio" name="env-timing" id="env-timing-pay" value="pay" checked>
+            <label for="env-timing-pay"><i data-lucide="banknote"></i>Jour de paie</label>
+            <input type="radio" name="env-timing" id="env-timing-first" value="first">
+            <label for="env-timing-first"><i data-lucide="calendar"></i>Le 1er</label>
+            <input type="radio" name="env-timing" id="env-timing-end" value="end">
+            <label for="env-timing-end"><i data-lucide="calendar-clock"></i>Fin de mois</label>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="env-priority-label">Priorité</span>
+          <div class="segmented three" id="env-priority" role="radiogroup" aria-labelledby="env-priority-label">
+            <input type="radio" name="env-priority" id="env-priority-1" value="1">
+            <label for="env-priority-1">Haute</label>
+            <input type="radio" name="env-priority" id="env-priority-2" value="2" checked>
+            <label for="env-priority-2">Normale</label>
+            <input type="radio" name="env-priority" id="env-priority-3" value="3">
+            <label for="env-priority-3">Basse</label>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="env-color-label">Couleur</span>
+          <div class="swatches" id="env-color" role="radiogroup" aria-labelledby="env-color-label"></div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="env-icon-label">Icône</span>
+          <div class="icon-grid" id="env-icon" role="radiogroup" aria-labelledby="env-icon-label"></div>
+        </div>
+      </details>
       <div class="plan-box" id="env-plan" hidden></div>
       <p class="hint" id="env-hint"></p>
       <p class="field-error" id="env-error" role="alert" hidden></p>
@@ -639,6 +643,23 @@
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-help" aria-labelledby="help-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="help-title">Aide et glossaire</h2>
+          <p>Les mots de BudgetFold, expliqués simplement.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <dl class="glossary" id="help-list"></dl>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="help-tour"><i data-lucide="map"></i>Visite guidée</button>
+        <button type="button" class="btn ghost" id="help-wizard"><i data-lucide="list-checks"></i>Questionnaire</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog class="sheet wide" id="dlg-accounts" aria-labelledby="acc-title">
@@ -900,7 +921,7 @@
 
       <section class="pj-section">
         <h3>Notes</h3>
-        <textarea id="pj-notes" rows="4" maxlength="4000" placeholder="Liste d'achats, liens, idées, étapes…"></textarea>
+        <textarea id="pj-notes" aria-label="Notes du projet" rows="4" maxlength="4000" placeholder="Liste d'achats, liens, idées, étapes…"></textarea>
       </section>
 
       <section class="pj-section">
@@ -1034,6 +1055,20 @@
         </div>
         <p class="hint small-hint">Saisis les valeurs de ta situation (elles changent selon l'activité et l'année) : BudgetFold n'en suppose aucune.</p>
       </details>
+      <div class="field">
+        <span class="field-label" id="set-theme-label">Thème</span>
+        <div class="pills theme-pills" id="set-theme" role="radiogroup" aria-labelledby="set-theme-label">
+          <button type="button" class="pill" role="radio" data-theme-pick="auto"><i data-lucide="sun-moon"></i>Auto</button>
+          <button type="button" class="pill" role="radio" data-theme-pick="light"><i data-lucide="sun"></i>Clair</button>
+          <button type="button" class="pill" role="radio" data-theme-pick="dark"><i data-lucide="moon"></i>Sombre</button>
+          <button type="button" class="pill" role="radio" data-theme-pick="rose"><i data-lucide="flower-2"></i>Rose pastel</button>
+          <button type="button" class="pill" role="radio" data-theme-pick="candy"><i data-lucide="candy"></i>Rose bonbon</button>
+        </div>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="set-text-large">
+        <span><strong>Texte plus grand</strong><small>Agrandit tous les textes de l'app.</small></span>
+      </label>
       <label class="check-row">
         <input type="checkbox" id="set-auto-close">
         <span><strong>Clôturer les mois automatiquement</strong><small>Avec tes derniers choix (reporter, remettre au budget ou épargner), sans ouvrir l'assistant.</small></span>
@@ -1056,26 +1091,12 @@
 
   <dialog class="sheet" id="dlg-welcome" data-lock aria-labelledby="welcome-title">
     <div class="sheet-body welcome">
-      <section id="w-step1" class="stack">
-        <span class="welcome-badge" aria-hidden="true"><i data-lucide="layers"></i></span>
-        <h2 id="welcome-title">Bienvenue sur BudgetFold</h2>
-        <p class="muted">Ton argent, rangé en enveloppes. Commençons par ton revenu mensuel net.</p>
-        <div class="field">
-          <label for="w-income">Revenu mensuel net</label>
-          <div class="money-input large">
-            <input id="w-income" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="1 450">
-            <span>€</span>
-          </div>
-        </div>
-      </section>
-      <section id="w-step2" class="stack" hidden>
-        <h2>Choisis un point de départ</h2>
-        <p class="muted">Les montants sont calculés à partir de ton revenu. Tu pourras tout modifier ensuite.</p>
-        <div class="tpl-grid" id="w-templates"></div>
-      </section>
+      <div class="wiz-progress" id="w-progress" aria-hidden="true"></div>
+      <p class="muted small" id="w-step-label"></p>
+      <section id="w-body" class="stack"></section>
       <p class="field-error" id="w-error" role="alert" hidden></p>
       <div class="sheet-actions">
-        <button type="button" class="btn ghost" id="w-skip">Passer</button>
+        <button type="button" class="btn ghost" id="w-skip">Partir de zéro</button>
         <button type="button" class="btn ghost" id="w-back">Retour</button>
         <button type="button" class="btn primary" id="w-next">Continuer</button>
       </div>
@@ -1156,6 +1177,12 @@
           </button>
         </li>
         <li>
+          <button type="button" class="menu-item" id="menu-help">
+            <span class="menu-ico"><i data-lucide="circle-help"></i></span>
+            <span><strong>Aide et glossaire</strong><small>Visite guidée, questionnaire, les mots expliqués</small></span>
+          </button>
+        </li>
+        <li>
           <button type="button" class="menu-item" id="menu-accounts">
             <span class="menu-ico"><i data-lucide="landmark"></i></span>
             <span><strong>Comptes et rapprochement</strong><small>Livret, espèces, virements, comparer avec ta banque</small></span>
@@ -1213,6 +1240,20 @@
   <input type="file" id="photo-replace-file" accept="image/*,application/pdf" hidden>
   <input type="file" id="csv-file" accept=".csv,.txt,text/csv,text/plain" hidden>
   <input type="file" id="scan-file" accept="image/*,application/pdf" hidden>
+  <div class="tour" id="tour" hidden>
+    <div class="tour-hole" id="tour-hole"></div>
+    <div class="tour-bubble" id="tour-bubble" role="dialog" aria-modal="false" aria-labelledby="tour-title">
+      <h3 id="tour-title"></h3>
+      <p id="tour-text"></p>
+      <div class="tour-actions">
+        <span class="tour-step" id="tour-step"></span>
+        <span>
+          <button type="button" class="btn ghost compact" id="tour-skip">Passer</button>
+          <button type="button" class="btn primary compact" id="tour-next">Suivant</button>
+        </span>
+      </div>
+    </div>
+  </div>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>

@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 7 — Interface, personnalisation et prise en main**
+**Phase 8 — Données, sécurité et plusieurs appareils**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -156,7 +156,27 @@ Décisions de la phase 6 :
 - Heures de dépense : heure de saisie des dépenses notées le jour même (l'app ne connaît pas l'heure réelle d'achat).
 
 ## Phase 7 — Interface, personnalisation et prise en main
-_À planifier._
+Plan :
+1. Couleurs : toutes les teintes claires écrites en dur passent en variables ; `--accent` pour textes et bordures ; palettes clair, sombre, rose pastel, rose bonbon ; « auto » suit le système ; texte agrandi.
+2. Enveloppes : couleur et icône (devinées d'après le nom), reprises sur les cartes, les puces de saisie, le journal, le calendrier, le bilan.
+3. Pastilles à la place des listes (répétition, période), raccourcis de date, mois écrit en clair.
+4. Premier lancement : départ vierge, questionnaire en 7 étapes (relançable), visite guidée en 7 bulles (relançable), « ? » contextuels et glossaire.
+5. Accessibilité vérifiée par les tests : noms des boutons, étiquettes des champs, cibles de 44 px, contrastes WCAG des 4 thèmes, aucun débordement à 390 px.
+
+- [x] Couleur et icône pour chaque enveloppe et projet, reprises partout
+- [x] Thèmes clair, sombre, rose pastel, rose bonbon, automatique ; variables CSS ; contrastes vérifiés
+- [x] Pastilles et boutons à la place des listes (répétition, période) ; dates et mois plus lisibles
+- [x] Départ vierge, questionnaire d'installation relançable
+- [x] Visite guidée relançable, aide contextuelle « ? », glossaire
+- [x] États vides, animations sobres, accessibilité (VoiceOver, focus, taille du texte)
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 7 :
+- Les profils prédéfinis (étudiant, jeune actif, famille) sont retirés, comme demandé dans le BACKLOG : le questionnaire part de la situation réelle.
+- Les projets saisis dans le questionnaire sont créés en mode Plan (rien n'est réservé) ; on les active depuis leur fiche.
+- Relancer le questionnaire ajoute ce qui manque, sans dupliquer ce qui porte déjà le même nom.
+- Les listes déroulantes de répétition et de période restent dans le code, masquées, sous les pastilles : le clavier et les tests existants continuent de fonctionner.
+- Le gris secondaire du thème clair passe de #94a3b8 à #718096 : l'ancien n'atteignait pas un contraste de 3 sur blanc.
 
 ## Phase 8 — Données, sécurité et plusieurs appareils
 _À planifier._

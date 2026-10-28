@@ -180,41 +180,6 @@
     return r.envId ? 'wallet' : 'calendar-clock';
   };
 
-  const TEMPLATES = {
-    student: {
-      label: 'Étudiant',
-      icon: 'graduation-cap',
-      blurb: 'Loyer, courses, transports et une petite épargne.',
-      recurring: [['Loyer', 35, 1], ['Téléphone & internet', 4, 8], ['Abonnements', 2, 10]],
-      spend: [['Courses', 20, 'month'], ['Transport', 5, 'month'], ['Loisirs', 9, 'month'], ['Santé & hygiène', 3, 'month']],
-      projects: [['Épargne de précaution', 5, 3]]
-    },
-    young: {
-      label: 'Jeune actif',
-      icon: 'briefcase',
-      blurb: 'Logement, énergie, assurances et un fonds d\'urgence.',
-      recurring: [['Loyer', 32, 1], ['Énergie & internet', 6, 5], ['Abonnements', 3, 10], ['Assurances', 3, 12]],
-      spend: [['Courses', 14, 'month'], ['Transport', 6, 'month'], ['Loisirs', 8, 'month'], ['Santé & hygiène', 3, 'month']],
-      projects: [['Fonds d\'urgence', 8, 3]]
-    },
-    family: {
-      label: 'Famille',
-      icon: 'users',
-      blurb: 'Charges du foyer, enfants et épargne de projets.',
-      recurring: [['Loyer / crédit', 30, 1], ['Énergie & internet', 7, 5], ['Assurances', 4, 8], ['Abonnements', 2, 10]],
-      spend: [['Courses', 18, 'month'], ['Transport', 7, 'month'], ['Enfants', 6, 'month'], ['Loisirs', 5, 'month'], ['Santé & hygiène', 3, 'month']],
-      projects: [['Épargne projets', 7, 6]]
-    },
-    blank: {
-      label: 'Page blanche',
-      icon: 'sparkles',
-      blurb: 'Je construis mes enveloppes moi-même.',
-      recurring: [],
-      spend: [],
-      projects: []
-    }
-  };
-
   const KEYWORD_HINTS = [
     { words: ['carrefour', 'leclerc', 'auchan', 'lidl', 'monoprix', 'intermarche', 'franprix', 'picard', 'aldi', 'casino', 'biocoop', 'grand frais', 'super u', 'hyper u', 'u express', 'netto', 'cora', 'naturalia', 'g20', 'spar', 'leader price', 'boulangerie', 'marche', 'courses'], env: /course|aliment|supermarch|nourrit|bouffe/ },
     { words: ['sncf', 'ratp', 'navigo', 'uber', 'bolt', 'blablacar', 'totalenergies', 'total access', 'esso', 'shell', 'avia', 'vinci', 'autoroute', 'tisseo', 'transdev', 'ouigo', 'flixbus', 'velib', 'carburant', 'essence', 'gazole', 'parking'], env: /transport|essence|carbu|deplac|voiture/ },
@@ -274,9 +239,29 @@
       closing: { env: 'keep', free: 'budget', projectId: null, auto: false },
       // Micro-entreprise : taux de cotisations et seuils saisis par l'utilisateur (aucune valeur par défaut).
       pro: { enabled: false, rateBp: 0, ceiling: null, vatThreshold: null },
-      lastAccountId: null, lastReminder: null
+      lastAccountId: null, lastReminder: null,
+      theme: 'auto', textLarge: false, tourDone: false
     }
   });
+  const THEMES = { auto: 'Auto', light: 'Clair', dark: 'Sombre', rose: 'Rose pastel', candy: 'Rose bonbon' };
+  // Enveloppes de dépenses : icônes proposées, et une couleur et une icône devinées d'après le nom.
+  const ENV_ICONS = ['wallet', 'shopping-cart', 'car', 'bus', 'fuel', 'utensils', 'coffee', 'shirt', 'heart-pulse', 'scissors', 'gift',
+    'gamepad-2', 'music', 'baby', 'dog', 'book-open', 'dumbbell', 'house', 'smartphone', 'sparkles'];
+  const ENV_GUESS = [
+    [/course|aliment|supermarch|epicerie/, 'shopping-cart', 'emerald'], [/essence|carbu|fuel/, 'fuel', 'orange'], [/transport|bus|metro|train|navigo/, 'bus', 'blue'],
+    [/voiture|auto|parking/, 'car', 'blue'], [/sortie|resto|restaurant|bar/, 'utensils', 'rose'], [/cafe/, 'coffee', 'orange'],
+    [/vetement|shopping|habit|mode/, 'shirt', 'violet'], [/sante|hygien|pharma|medecin/, 'heart-pulse', 'teal'], [/coiffeur|beaute/, 'scissors', 'violet'],
+    [/cadeau|noel|anniv/, 'gift', 'rose'], [/jeu|loisir|game/, 'gamepad-2', 'violet'], [/musique|concert/, 'music', 'violet'],
+    [/enfant|bebe|creche|ecole/, 'baby', 'amber'], [/animau|chien|chat|veto/, 'dog', 'amber'], [/livre|etude|formation/, 'book-open', 'teal'],
+    [/sport|salle|gym/, 'dumbbell', 'teal'], [/maison|logement|deco|bricol/, 'house', 'slate'], [/telephone|forfait|internet/, 'smartphone', 'slate']
+  ];
+  function envLook(name) {
+    const n = normName(name);
+    const hit = ENV_GUESS.find(([re]) => re.test(n));
+    const keys = Object.keys(PALETTE);
+    const hash = [...n].reduce((s, c) => s + c.charCodeAt(0), 0);
+    return { icon: hit ? hit[1] : 'wallet', color: hit ? hit[2] : keys[hash % keys.length] };
+  }
   const ACCOUNT_KINDS = { current: { label: 'Compte courant', icon: 'landmark' }, savings: { label: 'Livret / épargne', icon: 'piggy-bank' }, cash: { label: 'Espèces', icon: 'coins' } };
   const CLOSE_ACTIONS = ['keep', 'budget', 'project'];
 
@@ -342,7 +327,9 @@
           period: PERIODS[e.period] ? e.period : 'month',
           anchor: isISO(e.anchor) ? e.anchor : firstOf(monthOf(today)),
           reset: null,
-          createdAt
+          createdAt,
+          color: PALETTE[e.color] ? e.color : envLook(name).color,
+          icon: ENV_ICONS.includes(e.icon) ? e.icon : envLook(name).icon
         };
         if (e.reset && isISO(e.reset.date) && Number.isFinite(e.reset.ts)) env.reset = { date: e.reset.date, ts: e.reset.ts };
         s.envelopes.push(env);
@@ -480,6 +467,9 @@
     }));
     s.prefs.lastAccountId = rp.lastAccountId && validAcc.has(rp.lastAccountId) ? rp.lastAccountId : null;
     s.prefs.lastReminder = isISO(rp.lastReminder) ? rp.lastReminder : null;
+    s.prefs.theme = THEMES[rp.theme] ? rp.theme : 'auto';
+    s.prefs.textLarge = Boolean(rp.textLarge);
+    s.prefs.tourDone = Boolean(rp.tourDone);
     return s;
   }
 
@@ -946,7 +936,7 @@
         if (!planned) spentDay[day] += tx.amount;
         const env = spendEnv(tx.envId);
         const type = tx.recId && !env ? 'charge' : 'spend';
-        events[day].push({ label: tx.note || (env ? env.name : 'Dépense'), sub: env ? env.name : tx.recId ? 'Prélèvement' : 'Hors enveloppe', amount: -tx.amount, type, planned, txId: tx.id });
+        events[day].push({ label: tx.note || (env ? env.name : 'Dépense'), sub: env ? env.name : tx.recId ? 'Prélèvement' : 'Hors enveloppe', amount: -tx.amount, type, planned, txId: tx.id, envId: env ? env.id : null });
       }
     }
     for (const r of state.recurring) {
@@ -1637,7 +1627,10 @@
         deadline: input.goalType === 'fill' ? null : input.deadline || null, startMonth: isMonthKey(input.startMonth) ? input.startMonth : null,
         ...projectExtras(input), notes: '', checklist: []
       }
-      : { ...base, kind: 'spend', max: input.max, period: input.period, anchor: clock.today(), reset: null };
+      : {
+        ...base, kind: 'spend', max: input.max, period: input.period, anchor: clock.today(), reset: null,
+        color: PALETTE[input.color] ? input.color : envLook(check.data).color, icon: ENV_ICONS.includes(input.icon) ? input.icon : envLook(check.data).icon
+      };
     state.envelopes.push(env);
     lastAddedId = env.id;
     commit();
@@ -1657,6 +1650,8 @@
       if (env.period !== input.period) env.anchor = clock.today();
       env.max = input.max;
       env.period = input.period;
+      if (PALETTE[input.color]) env.color = input.color;
+      if (ENV_ICONS.includes(input.icon)) env.icon = input.icon;
     }
     commit();
     return ok(env);
@@ -2248,33 +2243,6 @@
     return null;
   }
 
-  function applyTemplate(key, income) {
-    const tpl = TEMPLATES[key];
-    if (!tpl) return fail('Modèle inconnu.');
-    const cm = currentMonth();
-    const euros = (pct) => Math.max(100, Math.round((income * pct) / 10000) * 100);
-    const recurring = tpl.recurring.map(([label, pct, day]) => {
-      const start = isoFor(cm, clampDay(day, cm));
-      return { id: uid(), type: 'expense', label, amount: euros(pct), freq: 'month', start, end: null, envId: null, postedUntil: initialPostedUntil(start) };
-    });
-    const envelopes = [
-      ...tpl.spend.map(([name, pct, period]) => ({ id: uid(), kind: 'spend', name, max: euros(pct), period, anchor: clock.today(), reset: null, createdAt: clock.now() })),
-      ...tpl.projects.map(([name, pct, mult]) => ({
-        id: uid(), kind: 'project', name, target: Math.round((income * mult) / 100) * 100, saved: 0, monthly: euros(pct), mode: 'active', deadline: null, createdAt: clock.now()
-      }))
-    ];
-    const reserved = recurring.reduce((s, r) => s + r.amount, 0)
-      + envelopes.reduce((s, e) => s + (e.kind === 'spend' ? e.max : e.monthly), 0);
-    if (reserved > income) return fail('Ce revenu est trop faible pour ce modèle : choisis « Page blanche » ou augmente-le.');
-    state.salary = income;
-    state.recurring = recurring;
-    state.envelopes = envelopes;
-    state.transactions = [];
-    state.rules = [];
-    state.prefs.onboarded = true;
-    postRecurring();
-    return ok();
-  }
   function parseDelimited(text, delim) {
     const rows = [];
     let row = [];
@@ -2983,14 +2951,16 @@
     'count-project', 'add-project', 'project-grid', 'empty-project', 'j-prev', 'j-next', 'j-label', 'j-summary', 'j-filter',
     'j-list', 'j-empty', 'a-prev', 'a-next', 'cal-label', 'calendar', 'day-detail', 'cash-title', 'cash-chart', 'cash-note',
     'cash-edit', 'forecast', 'rec-summary', 'rec-list', 'rec-empty', 'r-prev', 'r-next', 'r-label', 'r-tiles', 'r-bars',
-    'r-days', 'r-notes', 'dlg-welcome', 'w-step1', 'w-step2', 'w-income', 'w-next', 'w-skip', 'w-back', 'w-templates',
-    'w-error', 'dlg-tx', 'tx-form', 'tx-title', 'tx-sub', 'tx-mode', 'tx-scan', 'scan-status', 'scan-text', 'tx-amount',
+    'r-days', 'r-notes', 'dlg-welcome', 'w-progress', 'w-step-label', 'w-body', 'w-next', 'w-skip', 'w-back',
+    'w-error', 'dlg-help', 'help-list', 'help-tour', 'help-wizard', 'tour', 'tour-hole', 'tour-bubble', 'tour-title', 'tour-text',
+    'tour-step', 'tour-skip', 'tour-next', 'set-theme', 'set-text-large', 'menu-help', 'tx-repeat-pills', 'tx-date-chips',
+    'env-period-pills', 'env-deadline-hint', 'dlg-tx', 'tx-form', 'tx-title', 'tx-sub', 'tx-mode', 'tx-scan', 'scan-status', 'scan-text', 'tx-amount',
     'tx-label', 'tx-label-title', 'tx-env-field', 'tx-env-label', 'tx-chips', 'tx-covers-field', 'tx-covers', 'tx-covers-text', 'tx-date', 'tx-date-label', 'tx-repeat-field',
     'tx-repeat', 'tx-until-field', 'tx-until', 'tx-detail-box', 'tx-detail', 'tx-series', 'tx-series-text', 'tx-series-edit',
     'tx-hint', 'tx-error', 'tx-delete', 'tx-submit', 'dlg-env', 'env-form', 'env-title', 'env-sub', 'env-kind-wrap',
     'env-name', 'env-spend-fields', 'env-max', 'env-period', 'env-project-fields', 'env-mode-wrap', 'env-target',
     'env-saved', 'env-deadline', 'env-monthly', 'env-start-field', 'env-start-wrap', 'env-start-pay-text', 'env-goal', 'env-goal-hint',
-    'env-deadline-field', 'env-deadline-label', 'env-more', 'env-color', 'env-icon', 'p-sort', 'p-new', 'p-advice', 'p-groups',
+    'env-deadline-field', 'env-deadline-label', 'env-more', 'env-color', 'env-icon', 'env-timing', 'env-priority', 'p-sort', 'p-new', 'p-advice', 'p-groups',
     'wish-form', 'wish-name', 'wish-price', 'wish-error', 'wish-list', 'dlg-project', 'pj-icon', 'pj-title', 'pj-sub', 'pj-progress',
     'pj-deposit', 'pj-withdraw', 'pj-buy', 'pj-edit', 'pj-withdraw-form', 'pj-withdraw-amount', 'pj-withdraw-note', 'pj-error',
     'pj-results', 'pj-sim-section', 'sim-prudent', 'sim-real', 'sim-ambitious', 'sim-yield', 'sim-inflation', 'sim-raise',
@@ -3274,7 +3244,7 @@
     return el;
   }
 
-  const createSpendCard = (row) => cardShell('spend', row.id, 'wallet');
+  const createSpendCard = (row) => cardShell('spend', row.id, row.env.icon || 'wallet');
   const createProjectCard = (env) => cardShell('project', env.id, env.icon || 'target');
 
   // « Bien tenu » : on dépense moins vite que le temps qui passe. Une enveloppe est un plafond, pas un objectif.
@@ -3291,6 +3261,13 @@
     const ratio = budget > 0 ? used / budget : used > 0 ? 2 : 0;
     const pct = (v) => Math.round(Math.min(1, budget > 0 ? v / budget : 0) * 100);
     el.dataset.state = used > budget ? 'over' : used === budget ? 'empty' : ratio >= 0.85 ? 'tight' : 'safe';
+    el.dataset.color = env.color || 'blue';
+    const iconBox = el.querySelector('.envelope-icon');
+    if (iconBox.dataset.icon !== (env.icon || 'wallet')) {
+      iconBox.dataset.icon = env.icon || 'wallet';
+      fill(iconBox, icon(env.icon || 'wallet'));
+      flushIcons();
+    }
     r.name.textContent = env.name;
     r.name.title = env.name;
     const per = PERIODS[env.period];
@@ -3487,7 +3464,7 @@
     return h('button', { type: 'button', class: 'tx-row', dataset: { id: t.id, type: t.type, orphan: String(t.type === 'expense' && !env && !t.recId), planned: String(planned) } },
       t.photos && t.photos.length
         ? h('span', { class: 'tx-icon tx-thumb', 'aria-hidden': 'true', dataset: { photo: t.photos[0] } }, icon('paperclip'))
-        : h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
+        : h('span', { class: 'tx-icon', 'aria-hidden': 'true', dataset: { color: t.type === 'expense' && !t.recId && env && env.kind === 'spend' ? env.color : null } }, icon(t.type === 'expense' && !t.recId && env && env.kind === 'spend' ? env.icon || 'wallet' : txIcon(t))),
       h('span', { class: 'tx-body' }, h('strong', {}, title, planned ? h('em', { class: 'tag-planned', text: 'Prévu' }) : null, t.pro ? h('em', { class: 'tag-pro', text: 'Pro' }) : null), h('small', { text: txSub(t) })),
       h('span', { class: 'tx-amount', text: `${t.type === 'income' ? '+' : t.type === 'transfer' ? '↔ ' : '−'}${money(t.amount)}` }));
   }
@@ -3654,6 +3631,11 @@
         else if (ev.type === 'spend' || ev.type === 'project') kinds.add('spent');
       }
       const heat = dd.spent > 0 ? Math.min(3, Math.ceil((dd.spent / maxSpent) * 3)) : 0;
+      // Puce « dépenses » à la couleur de l'enveloppe la plus dépensée ce jour-là.
+      const byEnv = new Map();
+      for (const ev of dd.events) if (ev.envId && !ev.planned && ev.type === 'spend') byEnv.set(ev.envId, (byEnv.get(ev.envId) || 0) - ev.amount);
+      const topEnv = [...byEnv].sort((a, b) => b[1] - a[1])[0];
+      const spentColor = topEnv && spendEnv(topEnv[0]) ? spendEnv(topEnv[0]).color : null;
       cells.push(h('button', {
         type: 'button',
         class: `cal-day${iso === today ? ' is-today' : ''}${iso === ui.agendaDay ? ' is-selected' : ''}${iso < today ? ' is-past' : ''}`,
@@ -3662,7 +3644,7 @@
       },
       h('span', { class: 'cal-num', text: dayOf(iso) === 1 && dd.day > 1 ? `1 ${monthShort(monthOf(iso)).toLowerCase()}` : String(dayOf(iso)) }),
       dd.spent > 0 ? h('small', { class: 'cal-spent', text: `−${Math.round(dd.spent / 100)}` }) : null,
-      h('i', { class: 'cal-dots' }, ['spent', 'charge', 'income', 'planned'].filter((k) => kinds.has(k)).map((k) => h('b', { class: `dot-${k}` })))));
+      h('i', { class: 'cal-dots' }, ['spent', 'charge', 'income', 'planned'].filter((k) => kinds.has(k)).map((k) => h('b', { class: `dot-${k}`, dataset: { color: k === 'spent' ? spentColor : null } })))));
     }
     fill(els.calendar, cells);
 
@@ -3790,7 +3772,7 @@
       h('div', { class: 'tile' }, h('span', { text: 'Dont prélèvements' }), h('strong', { text: money(txs.filter((t) => t.type === 'expense' && t.recId && !spendEnv(t.envId)).reduce((s, t) => s + t.amount, 0)) })),
       h('div', { class: 'tile' }, h('span', { text: 'Épargné' }), h('strong', { text: money(saved) })));
 
-    const bars = d.spend.map((r) => ({ name: r.env.name, spent: r.inMonth, max: r.env.period === 'month' ? r.env.max : r.eq })).sort((a, b) => b.spent / b.max - a.spent / a.max);
+    const bars = d.spend.map((r) => ({ name: r.env.name, color: r.env.color, spent: r.inMonth, max: r.env.period === 'month' ? r.env.max : r.eq })).sort((a, b) => b.spent / b.max - a.spent / a.max);
     if (d.orphan > 0) bars.push({ name: 'Hors enveloppe', spent: d.orphan, max: 0 });
     if (d.charges > 0) bars.push({ name: 'Prélèvements', spent: d.charges, max: 0, kind: 'charge' });
     fill(els.rBars,
@@ -3799,7 +3781,7 @@
         ? bars.map((b) => {
           const ratio = b.max > 0 ? b.spent / b.max : 1;
           const stateName = b.kind === 'charge' ? 'charge' : b.max === 0 ? 'orphan' : ratio > 1 ? 'over' : ratio >= 0.85 ? 'tight' : 'safe';
-          return h('div', { class: 'bar-row', dataset: { state: stateName } },
+          return h('div', { class: 'bar-row', dataset: { state: stateName, color: b.color || null } },
             h('div', { class: 'bar-row-head' }, h('span', { text: b.name }), h('strong', { text: b.max > 0 ? `${money(b.spent)} / ${money(b.max)}` : money(b.spent) })),
             h('div', { class: 'bar' }, h('div', { class: 'bar-fill', style: `width:${Math.min(100, ratio * 100)}%` })));
         })
@@ -3962,7 +3944,7 @@
     const rows = derive(key).spend;
     const chip = (envId, name, sub) => h('button', {
       type: 'button', class: `chip${txUi.suggested && !txUi.envTouched && (txUi.envId || '') === envId && envId ? ' is-suggested' : ''}`, role: 'radio',
-      'aria-checked': String((txUi.envId || '') === envId), dataset: { env: envId }
+      'aria-checked': String((txUi.envId || '') === envId), dataset: { env: envId, color: envId && spendEnv(envId) ? spendEnv(envId).color : null }
     }, h('span', { text: name }), h('small', { text: sub }));
     fill(els.txChips,
       rows.map((r) => chip(r.env.id, r.env.name, r.left < 0 ? `−${money(-r.left)}` : `${money(r.left)} dispo`)),
@@ -4129,6 +4111,8 @@
         : repeat !== 'once' ? 'Dépense récurrente' : future ? 'Dépense prévue' : 'Nouvelle dépense';
     }
     renderTxChips();
+    renderPills(els.txRepeat, els.txRepeatPills, REPEAT_ICONS);
+    renderDateChips();
     syncCovers();
     updateTxHint();
     flushIcons();
@@ -4771,7 +4755,7 @@
 
   function envInput() {
     const optional = (el) => (el.value.trim() === '' ? 0 : parseAmount(el.value));
-    if (envUi.kind === 'spend') return { kind: 'spend', name: els.envName.value, max: parseAmount(els.envMax.value), period: els.envPeriod.value };
+    if (envUi.kind === 'spend') return { kind: 'spend', name: els.envName.value, max: parseAmount(els.envMax.value), period: els.envPeriod.value, color: checkedValue(els.envForm, 'env-color'), icon: checkedValue(els.envForm, 'env-icon') };
     const mode = checkedValue(els.envForm, 'env-mode') === 'plan' ? 'plan' : 'active';
     const target = parseAmount(els.envTarget.value);
     const saved = optional(els.envSaved);
@@ -4798,17 +4782,56 @@
   }
 
   // Pastilles de couleur et grille d'icônes (boutons radio, accessibles au clavier).
-  function renderChoices() {
+  function renderChoices(kind = envUi.kind) {
     if (!els.envColor.children.length) {
       fill(els.envColor, Object.entries(PALETTE).map(([key, label]) => [
         h('input', { type: 'radio', name: 'env-color', id: `env-color-${key}`, value: key }),
         h('label', { for: `env-color-${key}`, class: 'swatch', dataset: { color: key }, title: label }, h('span', { class: 'visually-hidden', text: label }))]));
-      fill(els.envIcon, PROJECT_ICONS.map((ic) => [
+    }
+    if (els.envIcon.dataset.kind !== kind) {
+      els.envIcon.dataset.kind = kind;
+      fill(els.envIcon, (kind === 'spend' ? ENV_ICONS : PROJECT_ICONS).map((ic) => [
         h('input', { type: 'radio', name: 'env-icon', id: `env-icon-${ic}`, value: ic }),
         h('label', { for: `env-icon-${ic}`, class: 'icon-choice', title: ic }, icon(ic), h('span', { class: 'visually-hidden', text: ic }))]));
       flushIcons();
     }
+    // Versement et priorité n'ont de sens que pour un projet.
+    els.envTiming.closest('.field').hidden = kind !== 'project';
+    els.envPriority.closest('.field').hidden = kind !== 'project';
+    els.envMore.querySelector('summary').textContent = kind === 'project' ? 'Versement, priorité, couleur et icône' : 'Couleur et icône';
   }
+
+  // Pastilles visuelles à la place des listes déroulantes (la liste reste, masquée, pour le clavier et les tests).
+  const REPEAT_ICONS = { once: 'circle-dot', day: 'sun', week: 'calendar-days', '2weeks': 'calendar-range', month: 'calendar', '2months': 'calendar-range', quarter: 'calendar-range', year: 'calendar-heart' };
+  function renderPills(select, box, icons) {
+    fill(box, [...select.options].map((o) => h('button', { type: 'button', class: 'pill', role: 'radio', 'aria-checked': String(o.value === select.value), disabled: o.disabled || null, dataset: { value: o.value } },
+      icons && icons[o.value] ? icon(icons[o.value]) : null, o.textContent)));
+    flushIcons();
+  }
+  function pillClick(select, box, icons) {
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-value]');
+      if (!b || b.disabled) return;
+      select.value = b.dataset.value;
+      select.dispatchEvent(new Event('change'));
+      renderPills(select, box, icons);
+    });
+  }
+  pillClick(els.txRepeat, els.txRepeatPills, REPEAT_ICONS);
+  pillClick(els.envPeriod, els.envPeriodPills, null);
+
+  // Raccourcis de date : hier, aujourd'hui, demain.
+  function renderDateChips() {
+    const today = clock.today();
+    const opts = [['Hier', addDays(today, -1)], ['Aujourd\'hui', today], ['Demain', addDays(today, 1)]];
+    fill(els.txDateChips, opts.map(([label, iso]) => h('button', { type: 'button', class: 'pill', role: 'radio', 'aria-checked': String(els.txDate.value === iso), dataset: { date: iso } }, label)));
+  }
+  els.txDateChips.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-date]');
+    if (!b) return;
+    els.txDate.value = b.dataset.date;
+    els.txDate.dispatchEvent(new Event('input'));
+  });
 
   function syncGoalFields() {
     const goal = checkedValue(els.envForm, 'env-goal') || 'monthly';
@@ -4826,6 +4849,8 @@
   function syncEnvFields() {
     els.envSpendFields.hidden = envUi.kind !== 'spend';
     els.envProjectFields.hidden = envUi.kind !== 'project';
+    renderChoices(envUi.kind);
+    renderPills(els.envPeriod, els.envPeriodPills, null);
     syncGoalFields();
     els.envSub.textContent = envUi.kind === 'spend'
       ? 'Un budget qui se remet à zéro à chaque période.'
@@ -4835,6 +4860,14 @@
   function updateEnvHint() {
     syncEnvStart();
     syncGoalFields();
+    const dl = els.envDeadline.value;
+    els.envDeadlineHint.textContent = isMonthKey(dl) ? `→ ${monthName(dl).toLowerCase()}, dans ${Math.max(0, monthDiff(currentMonth(), dl))} mois` : '';
+    // Nom tapé pour une nouvelle enveloppe : couleur et icône devinées, tant que l'utilisateur ne les a pas choisies.
+    if (!envUi.id && envUi.kind === 'spend' && !envUi.lookTouched && els.envName.value.trim()) {
+      const look = envLook(els.envName.value);
+      setRadio(els.envForm, 'env-color', look.color);
+      setRadio(els.envForm, 'env-icon', look.icon);
+    }
     const d = derive();
     const existing = envUi.id ? findEnv(envUi.id) : null;
     const input = envInput();
@@ -4867,6 +4900,7 @@
   }
 
   function openEnv({ kind = 'spend', env = null } = {}) {
+    envUi.lookTouched = false;
     envUi.id = env ? env.id : null;
     envUi.kind = env ? env.kind : kind;
     els.envTitle.textContent = env ? `Modifier « ${env.name} »` : envUi.kind === 'project' ? 'Nouveau projet' : 'Nouvelle enveloppe';
@@ -4881,13 +4915,13 @@
     els.envDeadline.value = env && env.kind === 'project' && env.deadline ? env.deadline : '';
     setRadio(els.envForm, 'env-mode', env && env.kind === 'project' ? env.mode : 'active');
     setRadio(els.envForm, 'env-start', 'pay');
-    renderChoices();
+    renderChoices(envUi.kind);
     const pj = env && env.kind === 'project' ? env : {};
     setRadio(els.envForm, 'env-goal', pj.goalType || 'monthly');
     setRadio(els.envForm, 'env-timing', pj.timing || 'pay');
     setRadio(els.envForm, 'env-priority', String(pj.priority || 2));
-    setRadio(els.envForm, 'env-color', pj.color || 'amber');
-    setRadio(els.envForm, 'env-icon', pj.icon || 'target');
+    setRadio(els.envForm, 'env-color', env ? env.color : envUi.kind === 'project' ? 'amber' : 'blue');
+    setRadio(els.envForm, 'env-icon', env ? env.icon : envUi.kind === 'project' ? 'target' : 'wallet');
     els.envMore.open = false;
     els.envSubmit.textContent = env ? 'Enregistrer' : 'Créer';
     els.envExtra.hidden = !env;
@@ -4899,8 +4933,12 @@
     if (!env) requestAnimationFrame(() => els.envName.focus());
   }
 
+  [els.envColor, els.envIcon].forEach((el) => el.addEventListener('change', () => { envUi.lookTouched = true; }));
   els.envKindWrap.addEventListener('change', () => {
     envUi.kind = checkedValue(els.envForm, 'env-kind') === 'project' ? 'project' : 'spend';
+    setRadio(els.envForm, 'env-color', envUi.kind === 'project' ? 'amber' : 'blue');
+    setRadio(els.envForm, 'env-icon', envUi.kind === 'project' ? 'target' : 'wallet');
+    envUi.lookTouched = false;
     els.envTitle.textContent = envUi.kind === 'project' ? 'Nouveau projet' : 'Nouvelle enveloppe';
     syncEnvFields();
     updateEnvHint();
@@ -6015,7 +6053,37 @@
     flushIcons();
   }
 
+  // ——— Thèmes et taille du texte ———
+  const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const pick = state.prefs.theme || 'auto';
+    const theme = pick === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : pick;
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.text = state.prefs.textLarge ? 'large' : 'normal';
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', { light: '#0f172a', dark: '#0a1020', rose: '#4a1230', candy: '#5d0f37' }[theme]);
+    els.setTheme.querySelectorAll('[data-theme-pick]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.themePick === pick)));
+  }
+  if (darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (state.prefs.theme === 'auto') applyTheme(); });
+  els.setTheme.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-theme-pick]');
+    if (!b) return;
+    state.prefs.theme = b.dataset.themePick;
+    applyTheme();
+    save();
+  });
+  els.setTextLarge.addEventListener('change', () => {
+    state.prefs.textLarge = els.setTextLarge.checked;
+    applyTheme();
+    save();
+  });
+  els.menuHelp.addEventListener('click', () => openHelp());
+  els.helpTour.addEventListener('click', () => { closeDialog(els.dlgHelp); startTour(); });
+  els.helpWizard.addEventListener('click', () => { closeDialog(els.dlgHelp); openWelcome(); });
+
   function openSettings() {
+    els.setTextLarge.checked = state.prefs.textLarge;
+    applyTheme();
     els.setDay.value = String(state.salaryDay);
     els.setOpening.value = state.openingBalance === null ? '' : toInputValue(state.openingBalance);
     setRadio(els.setForm, 'set-cycle', state.prefs.cycle);
@@ -6080,78 +6148,322 @@
     toast('Salaire mis à jour.');
   });
 
-  const welcome = { income: 0 };
+  // ——— Questionnaire d'installation (relançable depuis le menu) ———
+  const WIZ_INCOMES = ['APL / aide au logement', 'Prime d\'activité', 'Bourse', 'Allocations familiales', 'Pension', 'Autre revenu'];
+  const WIZ_CHARGES = [['Loyer / crédit', 1], ['Électricité / gaz', 5], ['Internet / box', 8], ['Téléphone', 8], ['Assurances', 10], ['Mutuelle', 10], ['Abonnement transport', 1], ['Streaming / abonnements', 15]];
+  const WIZ_HABITS = ['Courses', 'Transport / essence', 'Sorties / restaurants', 'Shopping / vêtements', 'Santé / hygiène', 'Enfants', 'Animaux'];
+  const WIZ_STEPS = ['Revenus', 'Aides', 'Charges fixes', 'Habitudes', 'Projets', 'Solde', 'Récapitulatif'];
+  const wiz = { step: 0, data: null };
 
-  function openWelcome() {
-    welcome.income = 0;
-    els.wStep1.hidden = false;
-    els.wStep2.hidden = true;
-    els.wSkip.hidden = false;
-    els.wNext.hidden = false;
-    els.wBack.hidden = true;
-    els.wIncome.value = '';
-    hideError(els.wError);
-    openDialog(els.dlgWelcome);
-    requestAnimationFrame(() => els.wIncome.focus());
+  function wizDefaults() {
+    return {
+      income: state.salary || null, payday: state.salaryDay || 1,
+      incomes: WIZ_INCOMES.map((label) => ({ label, amount: null, day: 5 })),
+      charges: WIZ_CHARGES.map(([label, day]) => ({ label, amount: null, day })),
+      habits: WIZ_HABITS.map((label) => ({ label, amount: null })),
+      projects: [{ name: '', target: null, deadline: '' }, { name: '', target: null, deadline: '' }, { name: '', target: null, deadline: '' }],
+      balance: null
+    };
   }
 
-  function renderTemplates() {
-    fill(els.wTemplates, Object.entries(TEMPLATES).map(([key, tpl]) => {
-      const summary = tpl.recurring.length + tpl.spend.length + tpl.projects.length === 0
-        ? 'Aucune enveloppe préremplie'
-        : `${tpl.recurring.length} prélèvements · ${tpl.spend.length} enveloppes · ${tpl.projects.length} projet${tpl.projects.length > 1 ? 's' : ''}`;
-      return h('button', { type: 'button', class: 'tpl', dataset: { tpl: key } },
-        h('span', { class: 'tpl-icon', 'aria-hidden': 'true' }, icon(tpl.icon)),
-        h('span', { class: 'tpl-body' }, h('strong', { text: tpl.label }), h('small', { text: tpl.blurb }), h('em', { text: summary })));
-    }));
+  function openWelcome() {
+    wiz.step = 0;
+    wiz.data = wizDefaults();
+    hideError(els.wError);
+    renderWizard();
+    openDialog(els.dlgWelcome);
+    requestAnimationFrame(() => { const i = els.wBody.querySelector('input'); if (i) i.focus(); });
+  }
+
+  const moneyField = (cls, value, label) => h('div', { class: 'money-input' }, h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', class: cls, value: value ? toInputValue(value) : '', placeholder: '0', 'aria-label': label }), h('span', { text: '€' }));
+  const dayField = (value, label) => h('input', { type: 'text', inputmode: 'numeric', class: 'wiz-day', value: String(value), maxlength: '2', 'aria-label': label });
+
+  function renderWizard() {
+    const d = wiz.data;
+    const step = wiz.step;
+    fill(els.wProgress, WIZ_STEPS.map((_, i) => h('i', { dataset: { done: String(i <= step) } })));
+    els.wStepLabel.textContent = `Étape ${step + 1} sur ${WIZ_STEPS.length} · ${WIZ_STEPS[step]}`;
+    const intro = (title, text) => [h('h2', { id: 'welcome-title', text: title }), h('p', { class: 'muted', text })];
+    let body;
+    if (step === 0) {
+      body = [intro(state.prefs.onboarded ? 'Questionnaire d\'installation' : 'Bienvenue sur BudgetFold', 'Quelques questions pour préparer ton budget. Tout reste sur ton appareil, et tu pourras tout modifier ensuite.'),
+        h('div', { class: 'field' }, h('label', { for: 'w-income', text: 'Salaire mensuel net' }),
+          h('div', { class: 'money-input large' }, h('input', { id: 'w-income', type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '1 450', value: d.income ? toInputValue(d.income) : '' }), h('span', { text: '€' }))),
+        h('div', { class: 'field' }, h('label', { for: 'w-payday', text: 'Jour de paie' }), h('input', { id: 'w-payday', type: 'text', inputmode: 'numeric', maxlength: '2', value: String(d.payday) })),
+        h('p', { class: 'hint small-hint', text: 'Pas de salaire fixe ? Laisse 0 et indique tes revenus à l\'étape suivante.' })];
+    } else if (step === 1) {
+      body = [intro('Aides et autres revenus', 'Ce qui arrive chaque mois en plus du salaire. Laisse vide ce qui ne te concerne pas.'),
+        h('div', { class: 'wiz-rows' }, d.incomes.map((r, i) => h('div', { class: 'wiz-row', dataset: { i: String(i), list: 'incomes' } },
+          h('label', { text: r.label }), moneyField('wiz-amount', r.amount, `${r.label} : montant`), dayField(r.day, `${r.label} : jour`))))];
+    } else if (step === 2) {
+      body = [intro('Charges fixes', 'Ce qui est prélevé chaque mois. Le jour sert à les placer dans ton agenda.'),
+        h('div', { class: 'wiz-rows' }, d.charges.map((r, i) => h('div', { class: 'wiz-row', dataset: { i: String(i), list: 'charges' } },
+          h('label', { text: r.label }), moneyField('wiz-amount', r.amount, `${r.label} : montant`), dayField(r.day, `${r.label} : jour`))))];
+    } else if (step === 3) {
+      body = [intro('Tes habitudes', 'Combien tu veux t\'accorder par mois : chaque montant devient une enveloppe, un plafond à ne pas dépasser.'),
+        h('div', { class: 'wiz-rows' }, d.habits.map((r, i) => h('div', { class: 'wiz-row two', dataset: { i: String(i), list: 'habits' } },
+          h('label', { text: r.label }), moneyField('wiz-amount', r.amount, `${r.label} : budget par mois`))))];
+    } else if (step === 4) {
+      body = [intro('Tes projets', 'Voyage, permis, moto, apport… Ils sont créés en simulation : tu les actives quand ta marge le permet. Un matelas de sécurité est créé d\'office.'),
+        h('div', { class: 'wiz-rows' }, d.projects.map((r, i) => h('div', { class: 'wiz-row', dataset: { i: String(i), list: 'projects' } },
+          h('input', { type: 'text', class: 'wiz-name', maxlength: '40', value: r.name, placeholder: `Projet ${i + 1}`, 'aria-label': `Nom du projet ${i + 1}` }),
+          moneyField('wiz-amount', r.target, `Objectif du projet ${i + 1}`),
+          h('input', { type: 'month', class: 'wiz-month', value: r.deadline, 'aria-label': `Date du projet ${i + 1} (facultatif)` }))))];
+    } else if (step === 5) {
+      body = [intro('Ton solde actuel', 'Ce qu\'affiche ta banque aujourd\'hui sur ton compte courant. Facultatif, mais l\'agenda pourra t\'alerter avant un découvert.'),
+        h('div', { class: 'field' }, h('label', { for: 'w-balance', text: 'Solde du compte courant' }),
+          h('div', { class: 'money-input large' }, h('input', { id: 'w-balance', type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: 'Ex : 640', value: d.balance !== null ? toInputValue(Math.abs(d.balance)) : '' }), h('span', { text: '€' })))];
+    } else {
+      const r = wizRecap();
+      body = [intro('Ton budget est prêt', 'Voici ce qui va être créé. Tu pourras tout ajuster ensuite.'),
+        h('div', { class: 'wiz-recap' },
+          h('div', { class: 'fc-line' }, h('span', { text: 'Revenus du mois' }), h('b', { text: `+${money(r.income)}` })),
+          h('div', { class: 'fc-line' }, h('span', { text: `${r.charges.length} ${plural(r.charges.length, 'charge fixe', 'charges fixes')}` }), h('b', { text: `−${money(r.chargesTotal)}` })),
+          h('div', { class: 'fc-line' }, h('span', { text: `${r.habits.length} ${plural(r.habits.length, 'enveloppe', 'enveloppes')}` }), h('b', { text: `−${money(r.habitsTotal)}` })),
+          h('div', { class: 'fc-line fc-total', dataset: { negative: String(r.free < 0) } }, h('span', { text: 'Reste à vivre estimé' }), h('b', { text: money(r.free) })),
+          r.projects.length ? h('p', { class: 'muted small', text: `Projets en simulation : ${r.projects.map((p) => p.name).join(', ')}.` }) : null,
+          r.free < 0 ? h('p', { class: 'hint', dataset: { tone: 'bad' }, text: 'Tes charges et enveloppes dépassent tes revenus : reviens en arrière pour baisser une enveloppe, ou ajuste après.' }) : null)];
+    }
+    fill(els.wBody, body);
+    els.wBack.hidden = step === 0;
+    els.wSkip.hidden = step !== 0;
+    els.wNext.textContent = step === WIZ_STEPS.length - 1 ? 'Créer mon budget' : step === 0 ? 'Continuer' : 'Suivant';
     flushIcons();
   }
 
+  // Lit l'étape affichée ; renvoie un message d'erreur si une saisie est invalide.
+  function readWizardStep() {
+    const d = wiz.data;
+    const amountOf = (input) => (input.value.trim() === '' ? null : parseAmount(input.value));
+    if (wiz.step === 0) {
+      const income = $id('w-income').value.trim() === '' ? 0 : parseAmount($id('w-income').value);
+      const day = parseDayInput($id('w-payday').value);
+      if (income === null) return 'Indique ton salaire net (ex : 1450), ou 0.';
+      if (!day) return 'Indique un jour de paie entre 1 et 31.';
+      Object.assign(d, { income, payday: day });
+    } else if (wiz.step === 5) {
+      const v = $id('w-balance').value.trim();
+      if (v === '') d.balance = null;
+      else {
+        const b = parseAmount(v.replace(/^[-−]/, ''));
+        if (b === null) return 'Indique un solde valide (ex : 640), ou laisse vide.';
+        d.balance = /^[-−]/.test(v) ? -b : b;
+      }
+    } else if (wiz.step >= 1 && wiz.step <= 4) {
+      for (const row of els.wBody.querySelectorAll('.wiz-row')) {
+        const item = d[row.dataset.list][Number(row.dataset.i)];
+        const amount = amountOf(row.querySelector('.wiz-amount'));
+        if (amount === null && row.querySelector('.wiz-amount').value.trim() !== '') return `Montant invalide pour « ${item.label || item.name || 'ce projet'} ».`;
+        if (row.dataset.list === 'projects') {
+          item.name = cleanName(row.querySelector('.wiz-name').value);
+          item.target = amount;
+          item.deadline = isMonthKey(row.querySelector('.wiz-month').value) ? row.querySelector('.wiz-month').value : '';
+          if (item.name && !item.target) return `Indique l'objectif de « ${item.name} ».`;
+        } else {
+          item.amount = amount;
+          const dayInput = row.querySelector('.wiz-day');
+          if (dayInput) {
+            const day = parseDayInput(dayInput.value);
+            if (!day) return `Jour invalide pour « ${item.label} » (1 à 31).`;
+            item.day = day;
+          }
+        }
+      }
+    }
+    return null;
+  }
+  const $id = (id) => document.getElementById(id);
+
+  function wizRecap() {
+    const d = wiz.data;
+    const incomes = d.incomes.filter((r) => r.amount > 0);
+    const charges = d.charges.filter((r) => r.amount > 0);
+    const habits = d.habits.filter((r) => r.amount > 0);
+    const projects = d.projects.filter((p) => p.name && p.target > 0);
+    const income = (d.income || 0) + incomes.reduce((s, r) => s + r.amount, 0);
+    const chargesTotal = charges.reduce((s, r) => s + r.amount, 0);
+    const habitsTotal = habits.reduce((s, r) => s + r.amount, 0);
+    return { incomes, charges, habits, projects, income, chargesTotal, habitsTotal, free: income - chargesTotal - habitsTotal };
+  }
+
+  // Crée l'échéancier, les enveloppes et les projets ; ce qui existe déjà (même nom) n'est pas dupliqué.
+  function applyWizard() {
+    const d = wiz.data;
+    const r = wizRecap();
+    const cm = currentMonth();
+    const first = !state.prefs.onboarded;
+    state.salary = d.income || 0;
+    state.salaryDay = d.payday;
+    if (first) state.prefs.cycle = 'pay';
+    const known = new Set(state.recurring.map((x) => normName(x.label)));
+    const startFor = (day) => {
+      const k = monthOf(cycleStart(cm));
+      let iso = isoFor(k, clampDay(day, k));
+      if (iso < cycleStart(cm)) iso = isoFor(shiftMonth(k, 1), clampDay(day, shiftMonth(k, 1)));
+      return iso;
+    };
+    let created = 0;
+    for (const [type, rows] of [['income', r.incomes], ['expense', r.charges]]) {
+      for (const row of rows) {
+        if (known.has(normName(row.label))) continue;
+        const start = startFor(row.day);
+        state.recurring.push({ id: uid(), type, label: cleanName(row.label), amount: row.amount, freq: 'month', start, end: null, envId: null, postedUntil: addDays(maxISO(start, cycleStart(cm)), -1) });
+        created++;
+      }
+    }
+    const names = new Set(state.envelopes.map((e) => normName(e.name)));
+    for (const row of r.habits) {
+      if (names.has(normName(row.label))) continue;
+      state.envelopes.push({ id: uid(), kind: 'spend', name: cleanName(row.label), max: row.amount, period: 'month', anchor: clock.today(), reset: null, createdAt: clock.now(), ...envLook(row.label) });
+      created++;
+    }
+    for (const p of r.projects) {
+      if (names.has(normName(p.name))) continue;
+      const deadline = p.deadline && p.deadline >= cm ? p.deadline : null;
+      state.envelopes.push({
+        id: uid(), kind: 'project', name: p.name, target: p.target, saved: 0, monthly: 0, mode: 'plan', deadline, startMonth: null,
+        goalType: deadline ? 'date' : 'monthly', timing: 'pay', priority: 2, color: 'violet', icon: 'target', category: 'project', notes: '', checklist: [], createdAt: clock.now()
+      });
+      created++;
+    }
+    if (d.balance !== null) Object.assign(mainAccount(), { opening: d.balance, openingDate: clock.today(), openingTs: clock.now(), reconciledAt: clock.today() });
+    state.prefs.onboarded = true;
+    if (first) state.lastClosed = shiftMonth(currentMonth(), -1);
+    if (first) state.lastRollover = currentMonth();
+    ensureSafety();
+    postRecurring();
+    commit();
+    return created;
+  }
+
   els.wNext.addEventListener('click', () => {
-    const income = parseAmount(els.wIncome.value);
-    if (!income || income <= 0) return showError(els.wError, 'Indique ton revenu mensuel net (ex : 1450).');
-    welcome.income = income;
+    const err = readWizardStep();
+    if (err) return showError(els.wError, err);
     hideError(els.wError);
-    els.wStep1.hidden = true;
-    els.wStep2.hidden = false;
-    els.wSkip.hidden = true;
-    els.wNext.hidden = true;
-    els.wBack.hidden = false;
-    renderTemplates();
+    if (wiz.step < WIZ_STEPS.length - 1) {
+      wiz.step++;
+      renderWizard();
+      const i = els.wBody.querySelector('input');
+      if (i) i.focus();
+      return;
+    }
+    const n = applyWizard();
+    closeDialog(els.dlgWelcome);
+    toast(`C'est prêt : ${n} ${plural(n, 'élément créé', 'éléments créés')}. Ajuste-les à ta façon.`);
+    if (!state.prefs.tourDone) setTimeout(() => startTour(), 500);
   });
 
-  els.wIncome.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+  els.wBack.addEventListener('click', () => {
+    readWizardStep();
+    hideError(els.wError);
+    wiz.step = Math.max(0, wiz.step - 1);
+    renderWizard();
+  });
+
+  els.wBody.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
       e.preventDefault();
       els.wNext.click();
     }
   });
 
-  els.wBack.addEventListener('click', () => {
-    els.wStep1.hidden = false;
-    els.wStep2.hidden = true;
-    els.wSkip.hidden = false;
-    els.wNext.hidden = false;
-    els.wBack.hidden = true;
-    hideError(els.wError);
-  });
-
   els.wSkip.addEventListener('click', () => {
     state.prefs.onboarded = true;
+    if (!state.lastClosed) state.lastClosed = shiftMonth(currentMonth(), -1);
     save();
     closeDialog(els.dlgWelcome);
     openSalaryEdit();
   });
 
-  els.wTemplates.addEventListener('click', (e) => {
-    const card = e.target.closest('[data-tpl]');
-    if (!card) return;
-    const res = applyTemplate(card.dataset.tpl, welcome.income);
-    if (!res.ok) return showError(els.wError, res.error);
-    commit();
-    closeDialog(els.dlgWelcome);
-    toast(`C'est prêt : ${state.envelopes.length + state.recurring.length} éléments créés, ajuste-les à ta façon.`);
+  // ——— Visite guidée (bulles sur chaque zone, relançable) ———
+  const narrow = () => window.matchMedia('(max-width: 759px)').matches;
+  const TOUR = [
+    { sel: () => (narrow() ? '#engine' : '#engine'), title: 'Ton reste à vivre', text: 'Ce qui te reste pour le mois, une fois tes charges, tes enveloppes et tes projets réservés. C\'est le chiffre à surveiller.' },
+    { sel: () => (narrow() ? '#nav-add' : '#top-add'), title: 'Le bouton +', text: 'Une dépense, un revenu, un ticket à scanner, un paiement qui revient chaque mois : tout passe par ici.' },
+    { sel: () => '#spend-grid', fallback: '#empty-spend', title: 'Tes enveloppes', text: 'Un plafond par poste (courses, sorties…). Dépenser moins que prévu, c\'est « bien tenu » : rien ne t\'oblige à tout dépenser.' },
+    { sel: () => '[data-tab="projects"]', title: 'Projets et simulations', text: 'Voyage, permis, matelas de sécurité : simule avant de te lancer, puis épargne chaque mois.' },
+    { sel: () => '[data-tab="agenda"]', title: 'Agenda', text: 'Ce qui arrive : prélèvements, paie, ton solde jour par jour et les 6 prochains mois.' },
+    { sel: () => '[data-tab="report"]', title: 'Bilan', text: 'Où part ton argent, ton score de santé, tes conseils et l\'historique des mois clôturés.' },
+    { sel: () => '#open-menu', title: 'Options', text: 'Réglages, thèmes, comptes, sauvegarde, aide et glossaire. Tu peux relancer cette visite depuis ce menu.' }
+  ];
+  const tour = { i: 0 };
+
+  function startTour() {
+    closeDialog(els.dlgMenu);
+    setTab('home');
+    tour.i = 0;
+    els.tour.hidden = false;
+    showTourStep();
+  }
+
+  function showTourStep() {
+    const step = TOUR[tour.i];
+    let target = document.querySelector(step.sel());
+    if (!target || !target.getClientRects().length || target.getBoundingClientRect().height === 0) target = step.fallback ? document.querySelector(step.fallback) : null;
+    els.tourTitle.textContent = step.title;
+    els.tourText.textContent = step.text;
+    els.tourStep.textContent = `${tour.i + 1} / ${TOUR.length}`;
+    els.tourNext.textContent = tour.i === TOUR.length - 1 ? 'Terminer' : 'Suivant';
+    if (target) {
+      target.scrollIntoView({ block: 'center', behavior: 'auto' });
+      const r = target.getBoundingClientRect();
+      const pad = 6;
+      Object.assign(els.tourHole.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
+      const below = r.bottom + 180 < window.innerHeight;
+      Object.assign(els.tourBubble.style, below ? { top: `${Math.min(window.innerHeight - 190, r.bottom + 14)}px`, bottom: 'auto' } : { top: 'auto', bottom: `${Math.max(16, window.innerHeight - r.top + 14)}px` });
+    } else {
+      Object.assign(els.tourHole.style, { left: '50%', top: '50%', width: '0px', height: '0px' });
+      Object.assign(els.tourBubble.style, { top: '30%', bottom: 'auto' });
+    }
+    els.tourNext.focus();
+  }
+
+  function endTour() {
+    els.tour.hidden = true;
+    state.prefs.tourDone = true;
+    save();
+  }
+
+  els.tourNext.addEventListener('click', () => {
+    if (tour.i >= TOUR.length - 1) return endTour();
+    tour.i++;
+    showTourStep();
   });
+  els.tourSkip.addEventListener('click', endTour);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !els.tour.hidden) endTour(); });
+  window.addEventListener('resize', () => { if (!els.tour.hidden) showTourStep(); });
+
+  // ——— Aide contextuelle et glossaire ———
+  const GLOSSARY = [
+    ['reste', 'Reste à vivre', 'Revenus du mois moins tout ce qui est déjà prévu : prélèvements, enveloppes, mises de tes projets, dépenses hors enveloppe et versements. C\'est l\'argent encore libre.'],
+    ['enveloppe', 'Enveloppe', 'Un budget pour un poste (courses, sorties…) sur une période. C\'est un plafond, pas un objectif : dépenser moins que prévu, c\'est bien tenu. Un dépassement est pris sur le reste à vivre.'],
+    ['mois', 'Mois budgétaire', 'La période de ton budget. Par défaut, elle commence le jour de ta paie ; tu peux choisir le 1er du mois dans Réglages.'],
+    ['projet', 'Projet actif', 'Un objectif d\'épargne : sa mise mensuelle est réservée chaque mois et versée à la clôture.'],
+    ['plan', 'Plan (simulation)', 'Un projet que tu simules sans rien réserver. Tu l\'actives quand ta marge le permet.'],
+    ['matelas', 'Matelas de sécurité', 'Une réserve pour les coups durs. Le repère courant : 3 mois de dépenses.'],
+    ['cloture', 'Clôture', 'À la fin d\'un mois, tu choisis quoi faire de ce qui reste : le garder dans l\'enveloppe, le remettre au budget ou l\'épargner. Un instantané du mois est figé dans l\'historique.'],
+    ['report', 'Report', 'Le reste d\'une enveloppe gardé pour le mois suivant (« le reste reste là »).'],
+    ['ordre', 'Ordre du mois', 'Le bon ordre : la paie arrive, tu mets de côté pour tes projets, les prélèvements passent, puis tu dépenses tes enveloppes au fil du mois.'],
+    ['sante', 'Score de santé', 'Un repère sur 100 calculé sur six points (marge, enveloppes, épargne, matelas, mois à venir, suivi). Chaque point a son conseil.'],
+    ['rapprochement', 'Rapprochement', 'Comparer le solde de l\'app avec celui de ta banque ; l\'écart peut être ajouté comme ajustement.'],
+    ['justificatif', 'Justificatif', 'La photo d\'un ticket ou une facture PDF, gardée sur ton appareil avec l\'opération.']
+  ];
+
+  function openHelp(term = null) {
+    fill(els.helpList, GLOSSARY.map(([id, title, text]) => [h('dt', { id: `g-${id}`, dataset: { focus: String(id === term) } }, title), h('dd', { text })]));
+    closeDialog(els.dlgMenu);
+    openDialog(els.dlgHelp);
+    if (term) requestAnimationFrame(() => { const el = document.getElementById(`g-${term}`); if (el) el.scrollIntoView({ block: 'center' }); });
+  }
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-help]');
+    if (!b) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openHelp(b.dataset.help);
+  }, true);
+
   const imp = { rows: [], note: '', file: null, subs: [] };
 
   function updateImportConfirm() {
@@ -6596,6 +6908,7 @@
   window.addEventListener('storage', (e) => {
     if (e.key !== STORAGE_KEY) return;
     state = load();
+    applyTheme();
     render();
   });
 
@@ -6616,23 +6929,24 @@
     setState: (raw) => { state = fromAnyVersion(raw) || emptyState(); render(); },
     tick: () => { const r = tick(); render(); return r; },
     derive, cashflow, forecast, upcomingEvents, computeInsights, parseStatement, parseReceipt, receiptDetail, runRollover,
-    postRecurring, occurrences, periodWindow, envRow, projectPlan, applyTemplate, render, setTab, guessEnvelope,
+    postRecurring, occurrences, periodWindow, envRow, projectPlan, render, setTab, guessEnvelope,
     cycleStart, cycleEnd, budgetKey, currentMonth, pendingClosings, closingDefaults, nextPayMonth,
     projectResults, simulate, runScenarios, projectAdvice, monthlyOf, projectContribution,
     Photos, savePhoto, compressPhoto, readZip, makeZip, fullBackupZip, proofsZip, pdfText, cropCanvas, proRevenue,
     accountBalance, frequentAmounts, favoriteSuggestions, searchTransactions, detectSubscriptions, buildIcs,
-    healthScore, monthlyReport, envelopeSuggestions, subscriptionsCost, noSpendStreak, splitNeeds, spendingHours,
+    healthScore, monthlyReport, envelopeSuggestions, subscriptionsCost, noSpendStreak, splitNeeds, spendingHours, envLook, applyTheme,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
       closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData,
       addWish, updateProjectInfo, openProject, saveCatRule, deleteCatRule, setProSettings, addSplit, openRules, openProofs, importJson,
-      addAccount, deleteAccount, reconcileAccount, addFavorite, deleteFavorite, useFavorite, addSubscription, openAccounts, openSubs, startCsvImport
+      openWelcome, startTour, openHelp, addAccount, deleteAccount, reconcileAccount, addFavorite, deleteFavorite, useFavorite, addSubscription, openAccounts, openSubs, startCsvImport
     }
   };
 
   const boot = tick();
   save();
+  applyTheme();
   render();
   securePersistence();
   cleanupPhotos();

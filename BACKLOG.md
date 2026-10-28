@@ -77,14 +77,14 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
   - Export : sauvegarde complète avec photos (zip), et export « justificatifs » par période (CSV + photos) pour la comptabilité.
 - Plus tard : catégories pro/perso, export pour la déclaration micro-entrepreneur.
 
-## 5. Interface (P2)
+## 5. Interface (P2) — ✅ fait (phases 6 et 7)
 
 - **Choix plus visuels** : remplacer les listes déroulantes (répétition, période d'enveloppe) par des pastilles ou boutons segmentés avec icônes. Calendriers et sélecteurs plus jolis.
 - **Couleurs personnalisées** pour enveloppes et projets, reprises partout : cartes, puces du calendrier, barres du bilan, prévisions.
 - **Thèmes** : clair (actuel), **sombre**, **rose pastel** (clair et « bonbon »).
 - **« Les 6 prochains mois »** : barre découpée par type (charges fixes, enveloppes, projets, dépenses prévues, marge) avec légende, et détail au toucher.
 
-## 6. Premier lancement et aide (P2)
+## 6. Premier lancement et aide (P2) — ✅ fait (phase 7)
 
 - Les profils prédéfinis (Étudiant, Jeune actif, Famille) ne sont pas pertinents. Garder un départ **vierge** par défaut.
 - **Questionnaire d'installation** (relançable depuis le menu) :
