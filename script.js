@@ -267,13 +267,17 @@
     rules: [],
     moves: [],
     closings: [],
+    favorites: [],
+    accounts: [{ id: 'main', name: 'Compte courant', kind: 'current', opening: null, openingDate: null, reconciledAt: null }],
     prefs: {
       onboarded: false, lastEnvId: null, since: clock.today(), lastExport: null, cycle: 'pay', safetyCreated: false,
       closing: { env: 'keep', free: 'budget', projectId: null, auto: false },
       // Micro-entreprise : taux de cotisations et seuils saisis par l'utilisateur (aucune valeur par défaut).
-      pro: { enabled: false, rateBp: 0, ceiling: null, vatThreshold: null }
+      pro: { enabled: false, rateBp: 0, ceiling: null, vatThreshold: null },
+      lastAccountId: null, lastReminder: null
     }
   });
+  const ACCOUNT_KINDS = { current: { label: 'Compte courant', icon: 'landmark' }, savings: { label: 'Livret / épargne', icon: 'piggy-bank' }, cash: { label: 'Espèces', icon: 'coins' } };
   const CLOSE_ACTIONS = ['keep', 'budget', 'project'];
 
   const initialPostedUntil = (start) => addDays(maxISO(start, firstOf(monthOf(clock.today()))), -1);
@@ -369,7 +373,7 @@
       if (!t || typeof t !== 'object') continue;
       const amount = toCents(t.amount);
       if (amount <= 0 || !isISO(t.date)) continue;
-      const type = ['expense', 'income', 'deposit', 'withdraw'].includes(t.type) ? t.type : null;
+      const type = ['expense', 'income', 'deposit', 'withdraw', 'transfer'].includes(t.type) ? t.type : null;
       if (!type) continue;
       let envId = typeof t.envId === 'string' && envIds.has(t.envId) ? t.envId : null;
       if (type === 'expense' && envId && !isSpend(envId)) envId = null;
@@ -384,6 +388,14 @@
       if (photos.length) tx.photos = photos;
       if (t.pro === true) tx.pro = true;
       if (typeof t.group === 'string' && t.group) tx.group = t.group.slice(0, 64);
+      const tags = cleanTags(t.tags);
+      if (tags.length) tx.tags = tags;
+      if (typeof t.accountId === 'string' && t.accountId) tx.accountId = t.accountId;
+      if (type === 'transfer') {
+        if (typeof t.toAccountId !== 'string' || !t.toAccountId || t.toAccountId === tx.accountId) continue;
+        tx.toAccountId = t.toAccountId;
+      }
+      if (t.adjust === true) tx.adjust = true;
       if (type === 'deposit' && t.src === 'close' && isMonthKey(t.closeKey)) Object.assign(tx, { src: 'close', closeKey: t.closeKey });
       if (typeof t.ref === 'string' && t.ref) tx.ref = t.ref.slice(0, 120);
       s.transactions.push(tx);
@@ -440,7 +452,41 @@
       });
     }
     s.closings.sort((a, b) => (a.key < b.key ? -1 : 1));
+
+    // Comptes : au moins le compte courant principal ; les opérations sans compte lui appartiennent.
+    const accIds = new Set();
+    const accounts = arr(raw.accounts).filter((a) => a && cleanName(a.name)).map((a) => {
+      const id = typeof a.id === 'string' && a.id && !accIds.has(a.id) ? a.id : uid();
+      accIds.add(id);
+      return {
+        id, name: cleanName(a.name), kind: ACCOUNT_KINDS[a.kind] ? a.kind : 'current',
+        opening: a.opening === null || a.opening === undefined ? null : clampInt(a.opening, -MAX_CENTS, MAX_CENTS, 0),
+        openingDate: isISO(a.openingDate) ? a.openingDate : null,
+        openingTs: Number.isFinite(a.openingTs) ? a.openingTs : 0,
+        reconciledAt: isISO(a.reconciledAt) ? a.reconciledAt : null
+      };
+    });
+    if (accounts.length) s.accounts = accounts.slice(0, 20);
+    else if (s.openingBalance !== null) Object.assign(s.accounts[0], { opening: s.openingBalance, openingDate: addDays(firstOf(monthOf(clock.today())), -1) });
+    const validAcc = new Set(s.accounts.map((a) => a.id));
+    s.transactions = s.transactions.filter((t) => {
+      if (t.accountId && !validAcc.has(t.accountId)) delete t.accountId;
+      return t.type !== 'transfer' || (validAcc.has(t.toAccountId) && (t.accountId || s.accounts[0].id) !== t.toAccountId);
+    });
+    s.favorites = arr(raw.favorites).filter((f) => f && cleanName(f.label) && toCents(f.amount) > 0).slice(0, 24).map((f) => ({
+      id: typeof f.id === 'string' && f.id ? f.id : uid(), label: cleanName(f.label), amount: toCents(f.amount),
+      type: f.type === 'income' ? 'income' : 'expense', envId: f.type !== 'income' && isSpend(f.envId) ? f.envId : null,
+      accountId: typeof f.accountId === 'string' && validAcc.has(f.accountId) ? f.accountId : null
+    }));
+    s.prefs.lastAccountId = rp.lastAccountId && validAcc.has(rp.lastAccountId) ? rp.lastAccountId : null;
+    s.prefs.lastReminder = isISO(rp.lastReminder) ? rp.lastReminder : null;
     return s;
+  }
+
+  // Étiquettes : minuscules, sans doublon, 5 au plus.
+  function cleanTags(v) {
+    const list = (Array.isArray(v) ? v : String(v ?? '').split(/[,;]/)).map((x) => cleanText(String(x).trim().replace(/^#+/, ''), 20).toLowerCase()).filter(Boolean);
+    return [...new Set(list)].slice(0, 5);
   }
 
   // v3 → v4 : les nouveaux champs (startMonth, covers, since, lastExport…) ont des valeurs par défaut neutres.
@@ -807,8 +853,8 @@
         if (future) incomeUpcoming += t.amount;
       } else if (t.type === 'deposit') {
         if (t.src !== 'close') deposits += t.amount;
-      } else if (t.type === 'withdraw') {
-        // Dépense payée avec l'argent d'une réserve : déjà mis de côté, ne touche pas le reste à vivre.
+      } else if (t.type === 'withdraw' || t.type === 'transfer') {
+        // Réserve dépensée (déjà mise de côté) ou virement entre comptes : le reste à vivre ne bouge pas.
       } else {
         if (future) upcoming += t.amount;
         else spentToDate += t.amount;
@@ -887,6 +933,8 @@
       if (tx.type === 'income') {
         inc[day] += tx.amount;
         events[day].push({ label: tx.note || 'Revenu', amount: tx.amount, type: 'income', planned, txId: tx.id });
+      } else if (tx.type === 'transfer') {
+        // Virement entre deux comptes : neutre pour la trésorerie globale.
       } else if (tx.type === 'withdraw') {
         events[day].push({ label: `Depuis la réserve · ${(findEnv(tx.envId) || {}).name || 'projet'}`, amount: 0, type: 'project', planned, txId: tx.id });
       } else if (tx.type === 'deposit') {
@@ -931,9 +979,12 @@
     const futureDays = n - t;
     const perDay = futureDays > 0 ? Math.round(spread / futureDays) : 0;
 
-    let openingKnown = state.openingBalance !== null;
+    // Solde de départ : celui des comptes courants (si connu), sinon le solde saisi dans les réglages.
+    const current = state.accounts.filter((a) => a.kind === 'current');
+    const accStart = current.length && current.every((a) => a.opening !== null) ? current.reduce((s, a) => s + accountBalance(a, addDays(ms, -1)), 0) : null;
+    let openingKnown = accStart !== null || state.openingBalance !== null;
     let balance = 0;
-    if (openingKnown && key === cm) balance = state.openingBalance;
+    if (openingKnown && key === cm) balance = accStart !== null ? accStart : state.openingBalance;
     else if (openingKnown && key > cm && depth < 24) balance = cashflow(shiftMonth(key, -1), depth + 1).end;
     else openingKnown = false;
 
@@ -978,7 +1029,7 @@
     const until = addDays(today, days);
     const list = [];
     for (const t of state.transactions) {
-      if (t.date <= today || t.date > until || t.type === 'withdraw') continue;
+      if (t.date <= today || t.date > until || t.type === 'withdraw' || t.type === 'transfer') continue;
       const env = findEnv(t.envId);
       list.push({
         date: t.date,
@@ -1515,6 +1566,7 @@
     state.recurring.forEach((r) => { if (r.envId === id) r.envId = null; });
     state.rules = state.rules.filter((r) => r.envId !== id);
     state.moves = state.moves.filter((m) => m.from !== id && m.to !== id);
+    state.favorites.forEach((f) => { if (f.envId === id) f.envId = null; });
     if (state.prefs.lastEnvId === id) state.prefs.lastEnvId = null;
     if (state.prefs.closing.projectId === id) state.prefs.closing.projectId = null;
     const reinjected = derive().free - before;
@@ -1591,6 +1643,11 @@
     if (openingBalance === undefined) return fail('Indique un solde valide, ou laisse le champ vide.');
     const before = `${state.prefs.cycle}|${state.salaryDay}`;
     state.salaryDay = salaryDay;
+    if (openingBalance !== state.openingBalance) {
+      // Le solde « au début du mois » devient le solde de départ du compte courant principal.
+      const main = mainAccount();
+      Object.assign(main, openingBalance === null ? { opening: null, openingDate: null } : { opening: openingBalance, openingDate: addDays(cycleStart(currentMonth()), -1) });
+    }
     state.openingBalance = openingBalance;
     if (cycle === 'pay' || cycle === 'calendar') state.prefs.cycle = cycle;
     if (autoClose !== undefined) state.prefs.closing.auto = Boolean(autoClose);
@@ -1616,6 +1673,9 @@
       const already = env.saved - (prev && prev.type === 'deposit' && prev.envId === env.id ? prev.amount : 0);
       const room = env.target - already;
       if (!env.safety && t.amount > room) return fail(room <= 0 ? 'Cet objectif est déjà atteint.' : `Il ne manque que ${money(room)} pour atteindre l'objectif.`);
+    } else if (t.type === 'transfer') {
+      if (!findAccount(t.accountId) || !findAccount(t.toAccountId)) return fail('Choisis les deux comptes.');
+      if (t.accountId === t.toAccountId) return fail('Choisis deux comptes différents.');
     } else if (t.type === 'withdraw') {
       const env = findEnv(t.envId);
       if (!env || env.kind !== 'project') return fail('Choisis la réserve ou le projet.');
@@ -1635,10 +1695,16 @@
     env.saved = Math.max(0, env.saved + sign * delta);
   }
 
-  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false, pro = false, photos = null }, { silent = false } = {}) {
-    const t = { id: uid(), type, envId: type === 'income' ? null : envId || null, amount, note: cleanNote(note), date, ts: clock.now() };
+  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false, pro = false, photos = null, tags = null, accountId = null, toAccountId = null, adjust = false }, { silent = false } = {}) {
+    const t = { id: uid(), type, envId: type === 'income' || type === 'transfer' ? null : envId || null, amount, note: cleanNote(note), date, ts: clock.now() };
+    if (accountId && findAccount(accountId)) t.accountId = accountId;
+    if (type === 'transfer') Object.assign(t, { accountId: t.accountId || mainAccount().id, toAccountId });
     const check = validateTx(t, null);
     if (!check.ok) return check;
+    const tg = cleanTags(tags);
+    if (tg.length) t.tags = tg;
+    if (adjust) t.adjust = true;
+    if (t.accountId && t.type !== 'transfer') state.prefs.lastAccountId = t.accountId;
     if (pro && (type === 'income' || type === 'expense')) t.pro = true;
     if (photos && photos.length) t.photos = photos.slice(0, 20);
     if (type === 'deposit' && covers) t.covers = budgetKey(date);
@@ -1670,6 +1736,15 @@
       if (patch.photos && patch.photos.length) tx.photos = patch.photos.slice(0, 20);
       else delete tx.photos;
     }
+    if (patch.tags !== undefined) {
+      const tg = cleanTags(patch.tags);
+      if (tg.length) tx.tags = tg;
+      else delete tx.tags;
+    }
+    if (patch.accountId !== undefined) {
+      if (patch.accountId && findAccount(patch.accountId)) tx.accountId = patch.accountId;
+      else delete tx.accountId;
+    }
     if (tx.type === 'deposit' && next.covers) tx.covers = budgetKey(tx.date);
     else delete tx.covers;
     const dt = cleanDetail(next.detail);
@@ -1695,6 +1770,240 @@
     state.transactions.push({ ...tx });
     applySaved(tx, 1);
     commit();
+  }
+
+  // ——— Comptes, virements et rapprochement ———
+  const findAccount = (id) => state.accounts.find((a) => a.id === id);
+  const mainAccount = () => state.accounts.find((a) => a.kind === 'current') || state.accounts[0];
+  const accountOf = (t) => t.accountId || mainAccount().id;
+
+  // Solde d'un compte à une date (fin de journée), depuis son solde de départ. null si le solde de départ est inconnu.
+  function accountBalance(acc, date = clock.today()) {
+    if (!acc || acc.opening === null || !acc.openingDate) return null;
+    let bal = acc.opening;
+    const after = (t) => t.date > acc.openingDate || (t.date === acc.openingDate && acc.openingTs && t.ts > acc.openingTs);
+    // Le salaire n'est pas une opération du journal : il arrive sur le compte courant principal chaque jour de paie.
+    if (acc === mainAccount() && state.salary > 0) {
+      for (let m = monthOf(acc.openingDate); m <= monthOf(date); m = shiftMonth(m, 1)) {
+        const pay = isoFor(m, clampDay(state.salaryDay, m));
+        if (pay > acc.openingDate && pay <= date) bal += state.salary;
+      }
+    }
+    for (const t of state.transactions) {
+      if (!after(t) || t.date > date) continue;
+      if (t.type === 'transfer') {
+        if (accountOf(t) === acc.id) bal -= t.amount;
+        if (t.toAccountId === acc.id) bal += t.amount;
+      } else if (accountOf(t) === acc.id) {
+        if (t.type === 'income') bal += t.amount;
+        else if (t.type === 'expense') bal -= t.amount;
+      }
+    }
+    return bal;
+  }
+
+  function addAccount({ name, kind, balance }) {
+    const n = cleanName(name);
+    if (!n) return fail('Donne un nom au compte (ex : Livret A).');
+    if (state.accounts.some((a) => normName(a.name) === normName(n))) return fail(`« ${n} » existe déjà.`);
+    if (state.accounts.length >= 20) return fail('20 comptes au maximum.');
+    if (balance === undefined) return fail('Indique un solde valide, ou laisse vide.');
+    const acc = { id: uid(), name: n, kind: ACCOUNT_KINDS[kind] ? kind : 'current', opening: balance, openingDate: balance === null ? null : clock.today(), openingTs: clock.now(), reconciledAt: balance === null ? null : clock.today() };
+    state.accounts.push(acc);
+    commit();
+    return ok(acc);
+  }
+
+  function deleteAccount(id) {
+    const acc = findAccount(id);
+    if (!acc) return fail('Compte introuvable.');
+    if (acc === mainAccount()) return fail('Le compte courant principal ne peut pas être supprimé.');
+    if (state.transactions.some((t) => t.accountId === id || t.toAccountId === id)) return fail('Ce compte a des opérations : il ne peut pas être supprimé.');
+    state.accounts = state.accounts.filter((a) => a.id !== id);
+    commit();
+    return ok(acc);
+  }
+
+  // Rapprochement : « ton app dit X, ta banque dit Y ». L'écart devient une opération d'ajustement hors enveloppe.
+  function reconcileAccount(id, bank) {
+    const acc = findAccount(id);
+    if (!acc) return fail('Compte introuvable.');
+    if (bank === null || bank === undefined || !Number.isInteger(bank)) return fail('Indique le solde affiché par ta banque (ex : 1234,56).');
+    const today = clock.today();
+    const app = accountBalance(acc, today);
+    acc.reconciledAt = today;
+    if (app === null) {
+      Object.assign(acc, { opening: bank, openingDate: today, openingTs: clock.now() });
+      if (acc === mainAccount()) state.openingBalance = null;
+      commit();
+      return ok({ diff: 0, app: null, bank, tx: null });
+    }
+    const diff = bank - app;
+    let tx = null;
+    if (diff !== 0) {
+      const res = addTransaction({ type: diff > 0 ? 'income' : 'expense', amount: Math.abs(diff), note: 'Ajustement (rapprochement)', date: today, accountId: acc.id, adjust: true }, { silent: true });
+      if (!res.ok) return res;
+      tx = res.data;
+    }
+    commit();
+    return ok({ diff, app, bank, tx });
+  }
+
+  // ——— Favoris et montants fréquents ———
+  function addFavorite({ label, amount, envId = null, type = 'expense', accountId = null }) {
+    const l = cleanName(label);
+    if (!l) return fail('Donne un nom au favori (ex : Café).');
+    if (amount === null || !(amount > 0)) return fail('Indique un montant valide.');
+    if (state.favorites.length >= 24) return fail('24 favoris au maximum.');
+    const fav = { id: uid(), label: l, amount, type: type === 'income' ? 'income' : 'expense', envId: type !== 'income' && spendEnv(envId) ? envId : null, accountId: findAccount(accountId) ? accountId : null };
+    state.favorites.push(fav);
+    commit();
+    return ok(fav);
+  }
+
+  function deleteFavorite(id) {
+    const i = state.favorites.findIndex((f) => f.id === id);
+    if (i === -1) return fail('Favori introuvable.');
+    const [fav] = state.favorites.splice(i, 1);
+    commit();
+    return ok({ fav, index: i });
+  }
+
+  const useFavorite = (id) => {
+    const f = state.favorites.find((x) => x.id === id);
+    if (!f) return fail('Favori introuvable.');
+    return addTransaction({ type: f.type, envId: f.envId, amount: f.amount, note: f.label, date: clock.today(), accountId: f.accountId });
+  };
+
+  // Montants les plus saisis (120 derniers jours), pour l'enveloppe choisie en priorité.
+  function frequentAmounts(envId = null, limit = 4) {
+    const since = addDays(clock.today(), -120);
+    const stats = new Map();
+    for (const t of state.transactions) {
+      if (t.type !== 'expense' || t.recId || t.date < since || t.date > clock.today()) continue;
+      const s = stats.get(t.amount) || { n: 0, score: 0 };
+      s.n += 1;
+      s.score += envId && t.envId === envId ? 3 : 1;
+      stats.set(t.amount, s);
+    }
+    return [...stats].filter(([, s]) => s.n >= 2).sort((a, b) => b[1].score - a[1].score || a[0] - b[0]).slice(0, limit).map(([a]) => a);
+  }
+
+  // Suggestions de favoris : même libellé, même montant, même enveloppe, saisis au moins 3 fois en 60 jours.
+  function favoriteSuggestions(limit = 3) {
+    const since = addDays(clock.today(), -60);
+    const groups = new Map();
+    for (const t of state.transactions) {
+      if (t.type !== 'expense' || t.recId || t.date < since || !t.note) continue;
+      const k = `${normName(t.note)}|${t.amount}|${t.envId || ''}`;
+      groups.set(k, { label: t.note, amount: t.amount, envId: t.envId, n: (groups.get(k) || { n: 0 }).n + 1 });
+    }
+    const known = new Set(state.favorites.map((f) => `${normName(f.label)}|${f.amount}|${f.envId || ''}`));
+    return [...groups.entries()].filter(([k, g]) => g.n >= 3 && !known.has(k)).map(([, g]) => g).sort((a, b) => b.n - a.n).slice(0, limit);
+  }
+
+  // ——— Recherche dans le journal : texte, montant, #étiquette, sur une période ———
+  function searchTransactions(q, { from = null, to = null } = {}) {
+    const words = normText(q).split(/\s+/).filter(Boolean);
+    const tags = words.filter((w) => w.startsWith('#') && w.length > 1).map((w) => w.slice(1));
+    const amount = parseAmount(q.trim());
+    const texts = words.filter((w) => !w.startsWith('#') && parseAmount(w) === null);
+    return state.transactions.filter((t) => {
+      if ((from && t.date < from) || (to && t.date > to)) return false;
+      if (tags.length && !tags.every((g) => (t.tags || []).some((x) => normText(x).startsWith(g)))) return false;
+      if (amount !== null && words.length === 1 && !tags.length) return t.amount === amount;
+      const env = findEnv(t.envId);
+      const hay = normText([t.note, t.detail, env && env.name, (t.tags || []).join(' '), findAccount(t.accountId) && findAccount(t.accountId).name].filter(Boolean).join(' '));
+      return texts.every((w) => hay.includes(w));
+    });
+  }
+
+  // ——— Abonnements repérés dans l'historique (même libellé, montant proche, rythme régulier) ———
+  const SUB_RHYTHMS = [['week', 6, 8], ['2weeks', 13, 16], ['month', 26, 35], ['2months', 55, 65], ['quarter', 85, 97], ['year', 350, 380]];
+  function detectSubscriptions(txs = state.transactions) {
+    const ruleKeys = new Set(state.recurring.map((r) => labelKey(r.label) || normName(r.label)));
+    const groups = new Map();
+    for (const t of txs) {
+      if (t.type !== 'expense' || t.recId || !t.note) continue;
+      const k = labelKey(t.note) || normName(t.note);
+      if (!k || [...ruleKeys].some((rk) => rk && (k.includes(rk) || rk.includes(k)))) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(t);
+    }
+    const out = [];
+    for (const [k, list] of groups) {
+      if (list.length < 3) continue;
+      const sorted = [...list].sort((a, b) => (a.date < b.date ? -1 : 1));
+      const last = sorted[sorted.length - 1];
+      const near = sorted.filter((t) => Math.abs(t.amount - last.amount) * 10 <= last.amount);
+      if (near.length < 3) continue;
+      const gaps = near.slice(1).map((t, i) => daysBetween(near[i].date, t.date));
+      const rhythm = SUB_RHYTHMS.find(([, lo, hi]) => gaps.filter((g) => g >= lo && g <= hi).length * 3 >= gaps.length * 2);
+      if (!rhythm) continue;
+      const envs = near.map((t) => t.envId).filter(Boolean);
+      const envId = envs.length ? envs.sort((a, b) => envs.filter((x) => x === b).length - envs.filter((x) => x === a).length)[0] : null;
+      out.push({ key: k, label: cleanName(last.note), amount: last.amount, freq: rhythm[0], last: last.date, count: near.length, envId: spendEnv(envId) ? envId : null });
+    }
+    return out.sort((a, b) => monthlyEq(b.amount, b.freq) - monthlyEq(a.amount, a.freq));
+  }
+
+  // Ajoute un abonnement repéré à l'échéancier, sans repasser les échéances déjà présentes au journal.
+  function addSubscription(sub) {
+    const check = validateRule({ type: 'expense', label: sub.label, amount: sub.amount, freq: sub.freq, start: sub.last, end: null, envId: sub.envId });
+    if (!check.ok) return check;
+    const rule = { id: uid(), type: 'expense', label: check.data, amount: sub.amount, freq: sub.freq, start: sub.last, end: null, envId: sub.envId || null, postedUntil: maxISO(sub.last, clock.today()) };
+    state.recurring.push(rule);
+    commit();
+    return ok(rule);
+  }
+
+  // ——— Échéances vers le calendrier du téléphone (.ics) : vraies notifications sans serveur ———
+  const ICS_FREQ = { day: 'FREQ=DAILY', week: 'FREQ=WEEKLY', '2weeks': 'FREQ=WEEKLY;INTERVAL=2', month: 'FREQ=MONTHLY', '2months': 'FREQ=MONTHLY;INTERVAL=2', quarter: 'FREQ=MONTHLY;INTERVAL=3', year: 'FREQ=YEARLY' };
+  const icsText = (s) => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  const icsDate = (iso) => iso.replace(/-/g, '');
+  function icsFold(line) {
+    const bytes = new TextEncoder().encode(line);
+    if (bytes.length <= 75) return line;
+    const out = [];
+    let cur = '';
+    for (const ch of line) {
+      if (new TextEncoder().encode(cur + ch).length > (out.length ? 74 : 75)) {
+        out.push(cur);
+        cur = ch;
+      } else cur += ch;
+    }
+    out.push(cur);
+    return out.join('\r\n ');
+  }
+  function buildIcs() {
+    const today = clock.today();
+    const stamp = `${icsDate(today)}T000000Z`;
+    const plain = (cents) => money(cents).replace(/[\u00a0\u202f]/g, ' ');
+    const events = [];
+    const event = (uidKey, date, summary, description, rrule) => events.push([
+      'BEGIN:VEVENT', `UID:${uidKey}@budgetfold`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${icsDate(date)}`, `DTEND;VALUE=DATE:${icsDate(addDays(date, 1))}`,
+      rrule ? `RRULE:${rrule}` : null, `SUMMARY:${icsText(summary)}`, `DESCRIPTION:${icsText(description)}`,
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT15H', `DESCRIPTION:${icsText(summary)}`, 'END:VALARM', 'END:VEVENT'
+    ].filter(Boolean));
+    for (const r of state.recurring) {
+      if (r.end && r.end < today) continue;
+      const next = nextOccurrence(r, today);
+      if (!next) continue;
+      const until = r.end ? `;UNTIL=${icsDate(r.end)}` : '';
+      event(r.id, next, `${r.type === 'income' ? '+' : '−'} ${plain(r.amount)} · ${r.label}`, `${FREQS[r.freq].label} · BudgetFold`, `${ICS_FREQ[r.freq]}${until}`);
+    }
+    for (const t of state.transactions) {
+      if (t.date <= today || t.recId || t.type === 'transfer' || t.type === 'withdraw' || daysBetween(today, t.date) > 400) continue;
+      event(t.id, t.date, `${t.type === 'income' ? '+' : '−'} ${plain(t.amount)} · ${t.note || (t.type === 'income' ? 'Revenu prévu' : 'Dépense prévue')}`, 'Prévu dans BudgetFold', null);
+    }
+    if (state.salary > 0) {
+      const m = monthOf(today);
+      let pay = isoFor(m, clampDay(state.salaryDay, m));
+      if (pay < today) pay = isoFor(shiftMonth(m, 1), clampDay(state.salaryDay, shiftMonth(m, 1)));
+      event('salaire', pay, `+ ${plain(state.salary)} · Salaire`, 'Jour de paie · BudgetFold', state.salaryDay > 28 ? 'FREQ=MONTHLY;BYMONTHDAY=-1' : 'FREQ=MONTHLY');
+    }
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//BudgetFold OS//FR', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:BudgetFold · échéances', ...events.flat(), 'END:VCALENDAR'];
+    return { text: `${lines.map(icsFold).join('\r\n')}\r\n`, count: events.length };
   }
 
   // Reste à vivre d'un mois si l'on appliquait `mutate` : on calcule sur une copie, l'état réel n'est pas touché.
@@ -1911,15 +2220,53 @@
     return negative ? -cents : cents;
   }
 
-  function parseStatement(text) {
+  // Préréglages des grandes banques françaises : noms de colonnes (en minuscules, sans accents) ou positions fixes.
+  const BANK_PRESETS = {
+    auto: { label: 'Détection automatique' },
+    bnp: { label: 'BNP Paribas', date: ['date operation'], label2: ['libelle operation', 'libelle court'], amount: ['montant operation'] },
+    sg: { label: 'Société Générale', date: ['date de l\'operation', 'date'], label2: ['detail de l\'ecriture', 'libelle'], amount: ['montant de l\'operation'] },
+    ca: { label: 'Crédit Agricole', date: ['date'], label2: ['libelle'], debit: ['debit euros', 'debit'], credit: ['credit euros', 'credit'] },
+    lcl: { label: 'LCL', fixed: { date: 0, amount: 1, label: 4 } },
+    bp: { label: 'Banque Populaire / Caisse d\'Épargne', date: ['date operation', 'date comptable'], label2: ['libelle complet', 'libelle simplifie', 'libelle'], amount: ['montant'], debit: ['debit'], credit: ['credit'] },
+    lbp: { label: 'La Banque Postale', date: ['date'], label2: ['libelle'], amount: ['montant(euros)', 'montant(eur)', 'montant'] },
+    cm: { label: 'Crédit Mutuel / CIC', date: ['date d\'operation', 'date'], label2: ['libelle'], debit: ['debit'], credit: ['credit'], amount: ['montant'] },
+    bourso: { label: 'Boursorama', date: ['dateop'], label2: ['label'], amount: ['amount'] },
+    fortuneo: { label: 'Fortuneo', date: ['date operation'], label2: ['libelle'], debit: ['debit'], credit: ['credit'] },
+    revolut: { label: 'Revolut', date: ['completed date', 'started date'], label2: ['description'], amount: ['amount'] },
+    n26: { label: 'N26', date: ['date', 'booking date'], label2: ['payee', 'partner name'], amount: ['amount (eur)', 'amount'] }
+  };
+
+  function presetColumns(cells, preset) {
+    const pick = (names) => (names ? names.map((n) => cells.indexOf(n)).find((i) => i >= 0) ?? -1 : -1);
+    const date = pick(preset.date);
+    const label = pick(preset.label2);
+    const amount = pick(preset.amount);
+    const debit = pick(preset.debit);
+    const credit = pick(preset.credit);
+    return date >= 0 && (amount >= 0 || debit >= 0 || credit >= 0) ? { date, label, amount: debit >= 0 || credit >= 0 ? -1 : amount, debit, credit } : null;
+  }
+
+  function parseStatement(text, presetKey = 'auto') {
     const clean = String(text || '').replace(/^﻿/, '');
     const delim = detectDelimiter(clean);
     const rows = parseDelimited(clean, delim);
     if (rows.length < 2) return { rows: [], skipped: 0, error: 'Fichier vide ou illisible.' };
+    const preset = BANK_PRESETS[presetKey] || BANK_PRESETS.auto;
 
     let headerIndex = -1;
     let cols = null;
-    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    if (preset.fixed) {
+      cols = { ...preset.fixed, debit: -1, credit: -1 };
+    } else if (preset.date) {
+      for (let i = 0; i < Math.min(rows.length, 40) && !cols; i++) {
+        const found = presetColumns(rows[i].map((c) => normText(c).trim().replace(/\s+/g, ' ')), preset);
+        if (found) {
+          cols = found;
+          headerIndex = i;
+        }
+      }
+    }
+    for (let i = 0; i < Math.min(rows.length, 40) && !cols; i++) {
       const cells = rows[i].map((c) => normText(c).trim());
       const find = (re) => cells.findIndex((c) => re.test(c));
       const dateIdx = (() => {
@@ -1927,7 +2274,7 @@
         if (!all.length) return -1;
         return all.find((idx) => /oper|compta/.test(cells[idx])) ?? all[0];
       })();
-      const labelIdx = find(/libell|label|description|intitul|detail|motif|objet|reference|nom|tiers|beneficiaire/);
+      const labelIdx = find(/libell|label|description|intitul|detail|motif|objet|reference|nom|tiers|beneficiaire|payee|partner|merchant/);
       const amountIdx = find(/^(montant|amount|somme|valeur)/);
       const debitIdx = find(/debit|sortie|retrait/);
       const creditIdx = find(/credit|entree|depot/);
@@ -2518,7 +2865,12 @@
     'dlg-photo', 'photo-sub', 'photo-view', 'photo-prev', 'photo-replace', 'photo-delete', 'photo-next', 'dlg-rules', 'rule-form',
     'rule-key', 'rule-env', 'rule-error', 'rule-list', 'dlg-proofs', 'proofs-form', 'proofs-from', 'proofs-to', 'proofs-pro-field',
     'proofs-pro', 'proofs-hint', 'proofs-error', 'set-pro-box', 'set-pro', 'set-pro-rate', 'set-pro-ceiling', 'set-pro-vat',
-    'menu-rules', 'menu-backup', 'menu-proofs', 'r-pro', 'photo-file', 'photo-replace-file', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
+    'menu-rules', 'menu-backup', 'menu-proofs', 'r-pro', 'photo-file', 'photo-replace-file', 'tx-quick', 'tx-account-field',
+    'tx-accounts', 'tx-tags-field', 'tx-tags', 'tx-fav-field', 'tx-fav', 'favs', 'favs-manage', 'favs-list', 'j-search', 'j-scope-wrap',
+    'j-scope', 'j-results', 'rec-detect', 'rec-ics', 'imp-preset', 'imp-subs', 'dlg-accounts', 'acc-list', 'acc-error',
+    'acc-transfer-box', 'acc-transfer-form', 'acc-transfer-amount', 'acc-transfer-from', 'acc-transfer-to', 'acc-transfer-date',
+    'acc-new-box', 'acc-new-form', 'acc-new-name', 'acc-new-kind', 'acc-new-balance', 'dlg-subs', 'subs-list', 'dlg-favs',
+    'favs-manage-list', 'dlg-shortcut', 'shortcut-url', 'shortcut-copy', 'shortcut-ics', 'menu-accounts', 'menu-shortcut', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
@@ -2866,7 +3218,7 @@
     } else if (plan) {
       const monthly = p.monthly;
       r.right.textContent = monthly > 0 ? `${money(monthly)}/mois` : 'À définir';
-      if (!monthly) r.note.textContent = 'Simulation : indique une date ou une mise mensuelle.';
+      if (!monthly) r.note.textContent = env.safety ? 'Reçoit les restes de fin de mois que tu choisis d’épargner. Touche pour voir la fiche.' :'Simulation : indique une date ou une mise mensuelle.';
       else if (p.gap > 0) r.note.textContent = `Il te manque ${money(p.gap)}/mois pour le lancer. Avec ta marge (${money(p.capacity)}/mois), objectif vers ${monthName(p.etaCapacity || p.eta).toLowerCase()}.`;
       else r.note.textContent = `Compatible avec ta marge actuelle : il te resterait ${money(-p.gap)}/mois. Touche pour voir la fiche.`;
     } else {
@@ -2894,7 +3246,56 @@
     els.insights.hidden = list.length === 0;
   }
 
+  // ——— Favoris (accueil) ———
+  function renderFavs() {
+    const favs = state.favorites;
+    const sugg = favs.length < 6 ? favoriteSuggestions(3) : [];
+    els.favs.hidden = !favs.length && !sugg.length;
+    fill(els.favsList,
+      favs.map((f) => h('button', { type: 'button', class: 'fav-chip', dataset: { fav: f.id }, 'aria-label': `Ajouter ${f.label}, ${money(f.amount)}` },
+        h('strong', { text: f.label }), h('small', { text: `${f.type === 'income' ? '+' : ''}${money(f.amount)}${f.envId && spendEnv(f.envId) ? ` · ${spendEnv(f.envId).name}` : ''}` }))),
+      sugg.map((s, i) => h('button', { type: 'button', class: 'fav-chip is-suggestion', dataset: { suggest: String(i) }, 'aria-label': `Créer le favori ${s.label}` },
+        h('strong', {}, icon('plus'), s.label), h('small', { text: `${money(s.amount)} · suggestion` }))));
+    els.favsList._sugg = sugg;
+    els.favsManage.hidden = !favs.length;
+  }
+
+  els.favsList.addEventListener('click', (e) => {
+    const s = e.target.closest('[data-suggest]');
+    if (s) {
+      const g = els.favsList._sugg[Number(s.dataset.suggest)];
+      const res = addFavorite({ label: g.label, amount: g.amount, envId: g.envId, type: 'expense' });
+      if (res.ok) toast(`Favori « ${g.label} » créé : touche-le pour l'ajouter.`);
+      return;
+    }
+    const b = e.target.closest('[data-fav]');
+    if (!b) return;
+    const res = useFavorite(b.dataset.fav);
+    if (!res.ok) return toast(res.error, 'error');
+    const t = res.data;
+    toast(`${t.type === 'income' ? '+' : '−'}${money(t.amount)} · ${t.note}`, { action: { label: 'Annuler', run: () => { if (deleteTransaction(t.id).ok) toast('Opération annulée.'); } } });
+  });
+
+  function renderFavsManage() {
+    fill(els.favsManageList, state.favorites.length
+      ? state.favorites.map((f) => h('div', { class: 'fav-row' },
+        h('span', {}, h('strong', { text: f.label }), h('small', { text: `${money(f.amount)}${f.envId && spendEnv(f.envId) ? ` · ${spendEnv(f.envId).name}` : ''}` })),
+        h('button', { type: 'button', class: 'icon-btn small', dataset: { del: f.id }, 'aria-label': `Supprimer le favori ${f.label}` }, icon('trash-2'))))
+      : h('p', { class: 'muted', text: 'Aucun favori.' }));
+    flushIcons();
+  }
+  els.favsManage.addEventListener('click', () => { renderFavsManage(); openDialog(els.dlgFavs); });
+  els.favsManageList.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-del]');
+    if (!b) return;
+    const res = deleteFavorite(b.dataset.del);
+    if (!res.ok) return;
+    renderFavsManage();
+    toast(`Favori « ${res.data.fav.label} » supprimé.`, { action: { label: 'Annuler', run: () => { state.favorites.splice(res.data.index, 0, res.data.fav); commit(); if (els.dlgFavs.open) renderFavsManage(); } } });
+  });
+
   function renderHome(d) {
+    renderFavs();
     renderInsights(d);
     const rows = d.spend.map((r) => ({ id: r.env.id, ...r }));
     const projs = state.envelopes.filter((e) => e.kind === 'project');
@@ -2912,6 +3313,7 @@
     if (tx.type === 'income') return 'banknote';
     if (tx.type === 'deposit') return 'piggy-bank';
     if (tx.type === 'withdraw') return 'battery-low';
+    if (tx.type === 'transfer') return 'arrow-left-right';
     if (tx.recId) {
       const r = findRule(tx.recId);
       return r ? ruleIcon(r) : 'repeat';
@@ -2925,7 +3327,9 @@
     if (t.type === 'income') bits.push('Revenu');
     else if (t.type === 'deposit') bits.push(`Projet · ${env ? env.name : ''}`);
     else if (t.type === 'withdraw') bits.push(`Payé avec « ${env ? env.name : 'la réserve'} »`);
-    else bits.push(env ? env.name : t.recId ? 'Prélèvement' : 'Hors enveloppe');
+    else if (t.type === 'transfer') bits.push(`Virement · ${(findAccount(accountOf(t)) || {}).name} → ${(findAccount(t.toAccountId) || {}).name}`);
+    else bits.push(t.adjust ? 'Ajustement' : env ? env.name : t.recId ? 'Prélèvement' : 'Hors enveloppe');
+    if (state.accounts.length > 1 && t.type !== 'transfer' && accountOf(t) !== mainAccount().id) bits.push((findAccount(accountOf(t)) || {}).name);
     if (t.recId) {
       const r = findRule(t.recId);
       bits.push(r ? FREQS[r.freq].label.toLowerCase() : 'récurrent');
@@ -2935,20 +3339,21 @@
       bits.push(n ? `${n} ${plural(n, 'article', 'articles')}` : 'détail');
     }
     if (t.group) bits.push('ticket réparti');
+    if (t.tags && t.tags.length) bits.push(t.tags.map((g) => `#${g}`).join(' '));
     if (t.photos && t.photos.length) bits.push(`${t.photos.length} ${plural(t.photos.length, 'justificatif', 'justificatifs')}`);
     return bits.join(' · ');
   }
 
   function txRow(t) {
     const env = findEnv(t.envId);
-    const title = t.note || (t.type === 'income' ? 'Revenu' : t.type === 'deposit' ? 'Versement' : t.type === 'withdraw' ? 'Retrait' : env ? env.name : 'Dépense');
+    const title = t.note || (t.type === 'income' ? 'Revenu' : t.type === 'deposit' ? 'Versement' : t.type === 'withdraw' ? 'Retrait' : t.type === 'transfer' ? 'Virement' : env ? env.name : 'Dépense');
     const planned = t.date > clock.today();
     return h('button', { type: 'button', class: 'tx-row', dataset: { id: t.id, type: t.type, orphan: String(t.type === 'expense' && !env && !t.recId), planned: String(planned) } },
       t.photos && t.photos.length
         ? h('span', { class: 'tx-icon tx-thumb', 'aria-hidden': 'true', dataset: { photo: t.photos[0] } }, icon('paperclip'))
         : h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
       h('span', { class: 'tx-body' }, h('strong', {}, title, planned ? h('em', { class: 'tag-planned', text: 'Prévu' }) : null, t.pro ? h('em', { class: 'tag-pro', text: 'Pro' }) : null), h('small', { text: txSub(t) })),
-      h('span', { class: 'tx-amount', text: `${t.type === 'income' ? '+' : '−'}${money(t.amount)}` }));
+      h('span', { class: 'tx-amount', text: `${t.type === 'income' ? '+' : t.type === 'transfer' ? '↔ ' : '−'}${money(t.amount)}` }));
   }
 
   function moveRow(m) {
@@ -2966,7 +3371,16 @@
     els.jLabel.textContent = periodLabel(key);
     els.jNext.disabled = monthDiff(cm, key) >= 12;
 
-    const monthTxs = state.transactions.map((t, i) => ({ t, i })).filter((x) => inCycle(x.t.date, key));
+    // Recherche : texte, montant ou #étiquette, sur la période choisie (sinon : le mois affiché).
+    const query = (ui.journalQuery || '').trim();
+    els.jScopeWrap.hidden = !query;
+    const today0 = clock.today();
+    const scopeFrom = { month: cycleStart(key), '3m': addDays(today0, -92), year: addDays(today0, -366), all: null }[ui.journalScope || 'month'];
+    const scopeTo = (ui.journalScope || 'month') === 'month' ? cycleEnd(key) : null;
+    const found = query ? new Set(searchTransactions(query, { from: scopeFrom, to: scopeTo }).map((t) => t.id)) : null;
+    const monthTxs = state.transactions.map((t, i) => ({ t, i })).filter((x) => (found ? found.has(x.t.id) : inCycle(x.t.date, key)));
+    els.jResults.hidden = !query;
+    els.jResults.textContent = query ? `${found.size} ${plural(found.size, 'résultat', 'résultats')} pour « ${query} »` : '';
     const envs = state.envelopes.filter((e) => e.kind === 'spend');
     if (ui.journalFilter.startsWith('env:') && !envs.some((e) => `env:${e.id}` === ui.journalFilter)) ui.journalFilter = 'all';
 
@@ -2995,7 +3409,7 @@
       return t.type === 'expense' && `env:${t.envId}` === f;
     };
     // Les déplacements d'argent apparaissent dans le journal comme une trace (ils ne sont pas des dépenses).
-    const moves = state.moves.filter((m) => m.key === key).map((m, i) => ({ t: { ...m, type: 'move' }, i: -1 - i }));
+    const moves = query ? [] : state.moves.filter((m) => m.key === key).map((m, i) => ({ t: { ...m, type: 'move' }, i: -1 - i }));
     const rows = [...monthTxs, ...moves].filter((x) => matches(x.t)).sort((a, b) => (a.t.date < b.t.date ? 1 : a.t.date > b.t.date ? -1 : b.t.ts - a.t.ts || b.i - a.i));
 
     const spent = monthTxs.filter((x) => x.t.type === 'expense' && x.t.date <= today).reduce((s, x) => s + x.t.amount, 0);
@@ -3360,7 +3774,7 @@
 
   const txUi = {
     mode: 'expense', txId: null, ruleId: null, envId: null, projectId: null, envTouched: false, suggested: false, scanning: false, coversTouched: false,
-    photos: [], items: [], split: { on: false, rows: [] }
+    photos: [], items: [], split: { on: false, rows: [] }, accountId: null
   };
 
   const sheetDate = () => (isISO(els.txDate.value) ? els.txDate.value : clock.today());
@@ -3433,6 +3847,34 @@
       ? `Le versement remplace la mise automatique de ${money(draft.due)} prévue en ${monthName(draft.key).toLowerCase()}, au lieu de s'y ajouter.`
       : `La mise ${ofMonth(draft.key)} est déjà couverte.`;
   }
+
+  // Montants fréquents (saisie en 3 touches : montant, enveloppe, valider).
+  function renderQuick(show) {
+    const list = show ? frequentAmounts(txUi.envId) : [];
+    els.txQuick.hidden = !list.length;
+    fill(els.txQuick, list.map((a) => h('button', { type: 'button', class: 'chip quick', dataset: { amount: String(a) }, 'aria-label': `Montant ${money(a)}` }, h('span', { text: money(a) }))));
+  }
+  els.txQuick.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-amount]');
+    if (!b) return;
+    els.txAmount.value = toInputValue(Number(b.dataset.amount));
+    els.txAmount.dispatchEvent(new Event('input'));
+  });
+
+  function renderTxAccounts(hide) {
+    const show = !hide && state.accounts.length > 1;
+    els.txAccountField.hidden = !show;
+    if (!show) return;
+    if (!findAccount(txUi.accountId)) txUi.accountId = mainAccount().id;
+    fill(els.txAccounts, state.accounts.map((a) => h('button', { type: 'button', class: 'chip', role: 'radio', 'aria-checked': String(a.id === txUi.accountId), dataset: { account: a.id } },
+      h('span', { text: a.name }), h('small', { text: ACCOUNT_KINDS[a.kind].label }))));
+  }
+  els.txAccounts.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-account]');
+    if (!b) return;
+    txUi.accountId = b.dataset.account;
+    renderTxAccounts(false);
+  });
 
   function updateTxHint() {
     const amount = parseAmount(els.txAmount.value);
@@ -3508,6 +3950,10 @@
     els.txLabel.placeholder = txUi.mode === 'income' ? 'Salaire, APL, bourse, vente…' : isDeposit ? 'Ex : prime, anniversaire…' : 'Courses, loyer, café…';
     els.txDetailBox.hidden = isDeposit;
     els.txProofField.hidden = isDeposit || editingRule;
+    els.txTagsField.hidden = isDeposit || editingRule;
+    els.txFavField.hidden = isDeposit || editingTx || editingRule || repeat !== 'once';
+    renderTxAccounts(isDeposit || editingRule);
+    renderQuick(txUi.mode === 'expense' && !editingTx && !editingRule);
     els.txProField.hidden = !state.prefs.pro.enabled || isDeposit || editingRule;
     const canSplit = txUi.mode === 'expense' && !editingTx && !editingRule && repeat === 'once';
     els.txSplitBtn.hidden = !canSplit || txUi.split.on;
@@ -3538,8 +3984,11 @@
   }
 
   function openAdd({ mode = 'expense', date = null, envId, projectId = null } = {}) {
-    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId, coversTouched: false, photos: [], items: [], split: { on: false, rows: [] } });
+    const lastAcc = findAccount(state.prefs.lastAccountId);
+    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId, coversTouched: false, photos: [], items: [], split: { on: false, rows: [] }, accountId: (lastAcc || mainAccount()).id });
     els.txPro.checked = false;
+    els.txTags.value = '';
+    els.txFav.checked = false;
     renderTxPhotos();
     renderSplit();
     resetScanUi();
@@ -3568,6 +4017,9 @@
   function openTx(tx) {
     Object.assign(txUi, { mode: tx.type, txId: tx.id, ruleId: null, envTouched: true, suggested: false, envId: tx.type === 'expense' ? tx.envId : null, projectId: tx.type === 'deposit' ? tx.envId : null, coversTouched: false, photos: [...(tx.photos || [])], items: [], split: { on: false, rows: [] } });
     els.txPro.checked = Boolean(tx.pro);
+    els.txTags.value = (tx.tags || []).join(', ');
+    els.txFav.checked = false;
+    txUi.accountId = accountOf(tx);
     renderTxPhotos();
     renderSplit();
     resetScanUi();
@@ -3717,7 +4169,9 @@
       const res = updateTransaction(txUi.txId, {
         type: mode, envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId, amount, note: label, date, detail,
         covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked,
-        pro: !els.txProField.hidden && els.txPro.checked, photos: mode === 'deposit' ? undefined : [...txUi.photos]
+        pro: !els.txProField.hidden && els.txPro.checked, photos: mode === 'deposit' ? undefined : [...txUi.photos],
+        tags: els.txTagsField.hidden ? undefined : els.txTags.value,
+        accountId: els.txAccountField.hidden ? undefined : txUi.accountId === mainAccount().id ? null : txUi.accountId
       });
       if (!res.ok) return showError(els.txError, res.error);
       if (mode === 'expense' && txUi.envId && label) learnRule(label, txUi.envId);
@@ -3769,7 +4223,9 @@
       amount, note: label, date, detail,
       covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked,
       pro: !els.txProField.hidden && els.txPro.checked,
-      photos: mode === 'deposit' ? null : [...txUi.photos]
+      photos: mode === 'deposit' ? null : [...txUi.photos],
+      tags: els.txTagsField.hidden ? null : els.txTags.value,
+      accountId: els.txAccountField.hidden || txUi.accountId === mainAccount().id ? null : txUi.accountId
     };
     const pre = validateTx(payload, null);
     if (!pre.ok) return showError(els.txError, pre.error);
@@ -3797,6 +4253,10 @@
     const res = addTransaction(payload);
     if (!res.ok) return showError(els.txError, res.error);
     if (mode === 'expense' && txUi.envId && txUi.envTouched && label) learnRule(label, txUi.envId);
+    if (!els.txFavField.hidden && els.txFav.checked) {
+      const env = spendEnv(payload.envId);
+      addFavorite({ label: cleanName(label) || (env ? env.name : mode === 'income' ? 'Revenu' : 'Dépense'), amount, envId: payload.envId, type: mode, accountId: payload.accountId });
+    }
     closeDialog(els.dlgTx);
     const t = res.data;
     const env = findEnv(t.envId);
@@ -4684,6 +5144,180 @@
     } else toast('Bien noté.', { action: { label: 'Annuler', run: () => updateProjectInfo(e.id, { boughtAt: null }) } });
   });
 
+  // ——— Comptes et rapprochement ———
+  const accUi = { pending: {} };
+  function openAccounts() {
+    hideError(els.accError);
+    accUi.pending = {};
+    renderAccounts();
+    closeDialog(els.dlgMenu);
+    openDialog(els.dlgAccounts);
+  }
+
+  function renderAccounts() {
+    const today = clock.today();
+    fill(els.accList, state.accounts.map((a) => {
+      const bal = accountBalance(a, today);
+      const p = accUi.pending[a.id];
+      return h('div', { class: 'acc-card', dataset: { id: a.id } },
+        h('div', { class: 'acc-head' },
+          h('span', { class: 'acc-icon', 'aria-hidden': 'true' }, icon(ACCOUNT_KINDS[a.kind].icon)),
+          h('span', { class: 'acc-title' }, h('strong', { text: a.name }), h('small', { text: `${ACCOUNT_KINDS[a.kind].label}${a.reconciledAt ? ` · comparé le ${shortDate(a.reconciledAt)}` : ''}` })),
+          h('b', { class: 'acc-balance', dataset: { negative: String(bal !== null && bal < 0) }, text: bal === null ? 'Solde inconnu' : money(bal) })),
+        h('form', { class: 'acc-reconcile', dataset: { id: a.id }, novalidate: true },
+          h('div', { class: 'money-input' }, h('input', { type: 'text', inputmode: 'decimal', class: 'acc-bank', placeholder: bal === null ? 'Solde actuel' : 'Solde banque', 'aria-label': `Solde de ${a.name} selon ta banque` }), h('span', { text: '€' })),
+          h('button', { type: 'submit', class: 'btn ghost compact', text: bal === null ? 'Enregistrer' : 'Comparer' }),
+          a === mainAccount() ? null : h('button', { type: 'button', class: 'icon-btn small acc-del', 'aria-label': `Supprimer le compte ${a.name}` }, icon('trash-2'))),
+        p ? h('div', { class: 'acc-diff', dataset: { tone: p.diff === 0 ? 'ok' : 'bad' } },
+          h('p', { text: p.diff === 0 ? `L'app dit ${money(p.app)}, ta banque aussi : tout est juste.` : `L'app dit ${money(p.app)}, ta banque dit ${money(p.bank)} : écart de ${signed(p.diff)}.` }),
+          p.diff === 0 ? null : h('button', { type: 'button', class: 'btn primary compact acc-adjust', dataset: { id: a.id } }, `Ajouter un ajustement de ${signed(p.diff)}`)) : null);
+    }));
+    const opts = (sel, value) => {
+      fill(sel, state.accounts.map((a) => h('option', { value: a.id, text: a.name })));
+      sel.value = value;
+    };
+    const others = state.accounts.filter((a) => a !== mainAccount());
+    opts(els.accTransferFrom, mainAccount().id);
+    opts(els.accTransferTo, others.length ? others[0].id : mainAccount().id);
+    els.accTransferBox.hidden = state.accounts.length < 2;
+    if (!els.accTransferDate.value) els.accTransferDate.value = today;
+    flushIcons();
+  }
+
+  els.accList.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target.closest('.acc-reconcile');
+    const acc = findAccount(form.dataset.id);
+    const raw = form.querySelector('.acc-bank').value.trim().replace(/^−/, '-');
+    const neg = raw.startsWith('-');
+    const val = parseAmount(raw.replace(/^-/, ''));
+    if (val === null) return showError(els.accError, 'Indique un solde valide (ex : 1234,56 ou -45).');
+    hideError(els.accError);
+    const bank = neg ? -val : val;
+    const app = accountBalance(acc);
+    if (app === null) {
+      reconcileAccount(acc.id, bank);
+      renderAccounts();
+      return toast(`Solde de départ de « ${acc.name} » enregistré : ${money(bank)}.`);
+    }
+    accUi.pending[acc.id] = { app, bank, diff: bank - app };
+    if (bank === app) {
+      acc.reconciledAt = clock.today();
+      commit();
+    }
+    renderAccounts();
+  });
+
+  els.accList.addEventListener('click', (e) => {
+    const adj = e.target.closest('.acc-adjust');
+    if (adj) {
+      const p = accUi.pending[adj.dataset.id];
+      const res = reconcileAccount(adj.dataset.id, p.bank);
+      if (!res.ok) return showError(els.accError, res.error);
+      delete accUi.pending[adj.dataset.id];
+      renderAccounts();
+      const t = res.data.tx;
+      return toast(`Ajustement de ${signed(res.data.diff)} ajouté au journal.`, { action: { label: 'Annuler', run: () => { if (t) deleteTransaction(t.id); if (els.dlgAccounts.open) renderAccounts(); } } });
+    }
+    const del = e.target.closest('.acc-del');
+    if (del) {
+      const res = deleteAccount(del.closest('.acc-card').dataset.id);
+      if (!res.ok) return showError(els.accError, res.error);
+      renderAccounts();
+      toast(`Compte « ${res.data.name} » supprimé.`, { action: { label: 'Annuler', run: () => { state.accounts.push(res.data); commit(); if (els.dlgAccounts.open) renderAccounts(); } } });
+    }
+  });
+
+  els.accTransferForm.addEventListener('submit', guard(() => {
+    const res = addTransaction({ type: 'transfer', accountId: els.accTransferFrom.value, toAccountId: els.accTransferTo.value, amount: parseAmount(els.accTransferAmount.value), date: els.accTransferDate.value, note: 'Virement' });
+    if (!res.ok) return showError(els.accError, res.error);
+    hideError(els.accError);
+    els.accTransferAmount.value = '';
+    renderAccounts();
+    const t = res.data;
+    toast(`Virement de ${money(t.amount)} enregistré.`, { action: { label: 'Annuler', run: () => { deleteTransaction(t.id); if (els.dlgAccounts.open) renderAccounts(); } } });
+  }));
+
+  els.accNewForm.addEventListener('submit', guard(() => {
+    const raw = els.accNewBalance.value.trim();
+    const res = addAccount({ name: els.accNewName.value, kind: els.accNewKind.value, balance: raw === '' ? null : (parseAmount(raw) ?? undefined) });
+    if (!res.ok) return showError(els.accError, res.error);
+    hideError(els.accError);
+    els.accNewName.value = '';
+    els.accNewBalance.value = '';
+    els.accNewBox.open = false;
+    renderAccounts();
+    toast(`Compte « ${res.data.name} » ajouté.`);
+  }));
+  els.menuAccounts.addEventListener('click', openAccounts);
+
+  // ——— Abonnements repérés, calendrier, raccourcis ———
+  function openSubs() {
+    renderSubs();
+    openDialog(els.dlgSubs);
+  }
+  function subRow(s, i, { check = false } = {}) {
+    const env = spendEnv(s.envId);
+    return h('div', { class: 'sub-row', dataset: { i: String(i) } },
+      check ? h('input', { type: 'checkbox', class: 'sub-check', checked: true, 'aria-label': `Ajouter ${s.label} à l'échéancier` }) : null,
+      h('span', { class: 'sub-main' }, h('strong', { text: s.label }),
+        h('small', { text: `${money(s.amount)} ${FREQS[s.freq].per} · ${s.count} fois, dernier le ${shortDate(s.last)}${env ? ` · ${env.name}` : ''}` })),
+      check ? null : h('button', { type: 'button', class: 'btn ghost compact sub-add' }, icon('plus'), 'Ajouter'));
+  }
+  function renderSubs() {
+    const subs = detectSubscriptions();
+    els.subsList._subs = subs;
+    fill(els.subsList, subs.length
+      ? subs.map((s, i) => subRow(s, i))
+      : h('p', { class: 'muted', text: 'Aucun paiement régulier non prévu trouvé. Importe quelques mois de relevé bancaire pour en repérer.' }));
+    flushIcons();
+  }
+  els.subsList.addEventListener('click', (e) => {
+    const b = e.target.closest('.sub-add');
+    if (!b) return;
+    const s = els.subsList._subs[Number(b.closest('.sub-row').dataset.i)];
+    const res = addSubscription(s);
+    if (!res.ok) return toast(res.error, 'error');
+    renderSubs();
+    toast(`« ${s.label} » ajouté à l'échéancier (${FREQS[s.freq].label.toLowerCase()}).`, { action: { label: 'Annuler', run: () => undoRule(res.data.id) } });
+  });
+
+  function exportIcs() {
+    const { text, count } = buildIcs();
+    if (!count) return toast('Aucune échéance à exporter pour l\'instant.', 'error');
+    download(new Blob([text], { type: 'text/calendar;charset=utf-8' }), 'budgetfold-echeances.ics');
+    toast(`${count} ${plural(count, 'échéance exportée', 'échéances exportées')} : ouvre le fichier pour les ajouter à ton calendrier.`);
+  }
+  els.recDetect.addEventListener('click', openSubs);
+  els.recIcs.addEventListener('click', exportIcs);
+  els.shortcutIcs.addEventListener('click', exportIcs);
+  els.menuShortcut.addEventListener('click', () => {
+    els.shortcutUrl.value = `${location.origin}${location.pathname}#add`;
+    closeDialog(els.dlgMenu);
+    openDialog(els.dlgShortcut);
+  });
+  els.shortcutCopy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(els.shortcutUrl.value);
+      toast('Lien copié.');
+    } catch {
+      els.shortcutUrl.select();
+      toast('Sélectionne le lien et copie-le.', 'error');
+    }
+  });
+
+  // Rappel à l'ouverture : une fois par jour, ce qui tombe demain.
+  function remindDue() {
+    const today = clock.today();
+    if (state.prefs.lastReminder === today || !state.prefs.onboarded) return;
+    state.prefs.lastReminder = today;
+    save();
+    const due = upcomingEvents(1).filter((e) => e.amount < 0 && e.freq !== 'day');
+    if (!due.length) return;
+    const total = due.reduce((s, e) => s - e.amount, 0);
+    toast(`Demain : ${due.slice(0, 3).map((e) => `${e.label} (${money(-e.amount)})`).join(', ')}${due.length > 3 ? '…' : ''} · ${money(total)} au total.`, { duration: 6000 });
+  }
+
   // ——— Micro-entreprise : bilan pro et seuils ———
   function proThresholds(year) {
     const pro = state.prefs.pro;
@@ -5238,7 +5872,7 @@
     closeDialog(els.dlgWelcome);
     toast(`C'est prêt : ${state.envelopes.length + state.recurring.length} éléments créés, ajuste-les à ta façon.`);
   });
-  const imp = { rows: [], note: '' };
+  const imp = { rows: [], note: '', file: null, subs: [] };
 
   function updateImportConfirm() {
     const n = imp.rows.filter((r) => r.include).length;
@@ -5269,9 +5903,10 @@
     updateImportConfirm();
   }
 
-  async function startCsvImport(file) {
+  async function startCsvImport(file, preset = els.impPreset.value || 'auto') {
     try {
-      const parsed = parseStatement(decodeBuffer(await file.arrayBuffer()));
+      imp.file = file;
+      const parsed = parseStatement(decodeBuffer(await file.arrayBuffer()), preset);
       if (parsed.error) return toast(parsed.error, 'error');
       const known = new Set(state.transactions.filter((t) => t.ref).map((t) => t.ref));
       let already = 0;
@@ -5281,7 +5916,7 @@
         known.add(r.ref);
         const expense = r.amount < 0;
         const type = expense ? 'expense' : 'income';
-        const maybe = state.transactions.some((t) => t.type === type && t.date === r.date && t.amount === Math.abs(r.amount));
+        const maybe = state.transactions.some((t) => t.type === type && t.amount === Math.abs(r.amount) && Math.abs(daysBetween(t.date, r.date)) <= 2);
         const auto = expense ? guessEnvelope(r.label) || '' : '';
         rows.push({ ...r, type, maybe, include: expense && !maybe, auto, env: auto });
       }
@@ -5291,7 +5926,11 @@
       imp.note = `${rows.length} ${plural(rows.length, 'nouvelle opération', 'nouvelles opérations')}${rows.length > 500 ? ' (500 premières affichées)' : ''}`
         + `${already ? ` · ${already} déjà importées` : ''}${parsed.skipped ? ` · ${parsed.skipped} lignes ignorées` : ''}`;
       hideError(els.impError);
+      // Abonnements : rythme régulier dans l'historique + ce relevé, pas encore à l'échéancier.
+      const pseudo = rows.filter((r) => r.type === 'expense').map((r) => ({ type: 'expense', note: r.label, amount: Math.abs(r.amount), date: r.date, envId: r.env || null }));
+      imp.subs = detectSubscriptions([...state.transactions, ...pseudo]);
       renderImportRows();
+      renderImportSubs();
       closeDialog(els.dlgMenu);
       openDialog(els.dlgImport);
     } catch {
@@ -5315,6 +5954,16 @@
   });
 
   els.impCancel.addEventListener('click', () => closeDialog(els.dlgImport));
+  fill(els.impPreset, Object.entries(BANK_PRESETS).map(([k, p]) => h('option', { value: k, text: p.label })));
+  els.impPreset.addEventListener('change', () => { if (imp.file) startCsvImport(imp.file, els.impPreset.value); });
+
+  function renderImportSubs() {
+    const subs = imp.subs || [];
+    els.impSubs.hidden = !subs.length;
+    fill(els.impSubs, subs.length ? [h('h3', { class: 'small-title', text: `${subs.length} ${plural(subs.length, 'abonnement repéré', 'abonnements repérés')}` }),
+      h('p', { class: 'muted small', text: 'Coche ceux à ajouter à l\'échéancier : ils seront prévus chaque mois.' }),
+      subs.map((s, i) => subRow(s, i, { check: true }))] : []);
+  }
 
   els.impConfirm.addEventListener('click', () => {
     let count = 0;
@@ -5326,10 +5975,15 @@
         if (r.type === 'expense' && r.env && r.env !== r.auto) learnRule(r.label, r.env);
       }
     }
+    let subsAdded = 0;
+    els.impSubs.querySelectorAll('.sub-row').forEach((row) => {
+      if (!row.querySelector('.sub-check').checked) return;
+      if (addSubscription(imp.subs[Number(row.dataset.i)]).ok) subsAdded++;
+    });
     commit();
     closeDialog(els.dlgImport);
     ui.journalMonth = null;
-    toast(`${count} ${plural(count, 'opération importée', 'opérations importées')}.`);
+    toast(`${count} ${plural(count, 'opération importée', 'opérations importées')}${subsAdded ? ` · ${subsAdded} ${plural(subsAdded, 'abonnement ajouté', 'abonnements ajoutés')} à l'échéancier` : ''}.`);
   });
 
   function exportData() {
@@ -5456,6 +6110,8 @@
   els.jPrev.addEventListener('click', () => { ui.journalMonth = shiftMonth(ui.journalMonth || currentMonth(), -1); renderJournal(); });
   els.jNext.addEventListener('click', () => { ui.journalMonth = shiftMonth(ui.journalMonth || currentMonth(), 1); renderJournal(); });
   els.jFilter.addEventListener('change', () => { ui.journalFilter = els.jFilter.value; renderJournal(); });
+  els.jSearch.addEventListener('input', () => { ui.journalQuery = els.jSearch.value; renderJournal(); });
+  els.jScope.addEventListener('change', () => { ui.journalScope = els.jScope.value; renderJournal(); });
   els.jList.addEventListener('click', async (e) => {
     const mv = e.target.closest('[data-move]');
     if (mv) {
@@ -5469,6 +6125,13 @@
     }
     const row = e.target.closest('.tx-row');
     const tx = row && state.transactions.find((t) => t.id === row.dataset.id);
+    if (tx && tx.type === 'transfer') {
+      const confirmed = await confirmAction({ title: 'Supprimer ce virement ?', text: `${money(tx.amount)} · ${txSub(tx)}.`, confirmLabel: 'Supprimer', danger: true });
+      if (!confirmed) return;
+      const res = deleteTransaction(tx.id);
+      if (res.ok) toast('Virement supprimé.', { action: { label: 'Annuler', run: () => restoreTransaction(res.data) } });
+      return;
+    }
     if (tx && tx.type === 'withdraw') openProject(tx.envId);
     else if (tx) openTx(tx);
   });
@@ -5604,9 +6267,9 @@
 
   function applyHash() {
     const hash = location.hash.replace('#', '');
-    if (hash === 'add') {
+    if (hash === 'add' || hash === 'add-income') {
       try { history.replaceState(null, '', location.pathname + location.search); } catch { /* file:// */ }
-      openAdd({ mode: 'expense' });
+      openAdd({ mode: hash === 'add' ? 'expense' : 'income' });
       return;
     }
     const tab = hash === 'bilan' ? 'report' : hash === 'projets' ? 'projects' : TABS.includes(hash) ? hash : null;
@@ -5676,11 +6339,13 @@
     cycleStart, cycleEnd, budgetKey, currentMonth, pendingClosings, closingDefaults, nextPayMonth,
     projectResults, simulate, runScenarios, projectAdvice, monthlyOf, projectContribution,
     Photos, savePhoto, compressPhoto, readZip, makeZip, fullBackupZip, proofsZip, pdfText, cropCanvas, proRevenue,
+    accountBalance, frequentAmounts, favoriteSuggestions, searchTransactions, detectSubscriptions, buildIcs,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
       closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData,
-      addWish, updateProjectInfo, openProject, saveCatRule, deleteCatRule, setProSettings, addSplit, openRules, openProofs, importJson
+      addWish, updateProjectInfo, openProject, saveCatRule, deleteCatRule, setProSettings, addSplit, openRules, openProofs, importJson,
+      addAccount, deleteAccount, reconcileAccount, addFavorite, deleteFavorite, useFavorite, addSubscription, openAccounts, openSubs, startCsvImport
     }
   };
 
@@ -5695,4 +6360,5 @@
   applyHash();
   if (!state.prefs.onboarded && state.salary <= 0 && state.envelopes.length === 0) openWelcome();
   else if (pendingClosings().length && !state.prefs.closing.auto) openClosing();
+  if (state.prefs.onboarded) remindDue();
 })();

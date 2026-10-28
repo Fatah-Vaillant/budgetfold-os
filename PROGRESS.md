@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 5 — Saisie rapide et usage quotidien**
+**Phase 6 — Analyses et optimisation**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -110,7 +110,31 @@ Décisions de la phase 4 :
 - Le zip est écrit sans bibliothèque ; l'import lit aussi les zip compressés (DecompressionStream).
 
 ## Phase 5 — Saisie rapide et usage quotidien
-_À planifier._
+Plan :
+1. Données v4 : `favorites[]`, `accounts[]` (solde de départ daté), `tx.accountId`, `tx.toAccountId` (virement), `tx.tags`, `tx.adjust`, `prefs.lastAccountId`, `prefs.lastReminder`.
+2. Saisie rapide : montants fréquents, dernière enveloppe, favoris (créés depuis la saisie ou suggérés), en un toucher depuis l'accueil.
+3. Journal : recherche (texte, montant, #étiquette) sur une période ; étiquettes ; notes (champ « Détail »).
+4. Comptes multiples, virements, rapprochement « l'app dit X, ta banque dit Y » avec ajustement guidé.
+5. Import CSV : préréglages de 11 banques, doublons à ±2 jours, abonnements repérés proposés à l'échéancier.
+6. Rappels sans serveur : rappel « demain » à l'ouverture, export .ics (RRULE + alarme la veille), liens #add et #add-income.
+
+- [x] Saisie en 3 touches (montants fréquents, dernière enveloppe)
+- [x] Favoris / modèles en un toucher (+ suggestions)
+- [x] Opération répartie (faite en phase 4 : ticket réparti)
+- [x] Recherche dans le journal (texte, montant, période), étiquettes, notes
+- [x] Comptes multiples, virements, rapprochement guidé
+- [x] Import CSV : préréglages bancaires, doublons, abonnements repérés
+- [x] Rappels : à l'ouverture, export .ics, lien #add
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 5 :
+- Le budget reste global : peu importe le compte qui paie, une dépense compte dans son enveloppe. Les comptes servent à suivre les soldes réels et à rapprocher avec la banque.
+- Un virement entre comptes et un versement sur projet ne changent pas le solde du compte (un projet est une enveloppe virtuelle) ; pour suivre un livret, on fait un virement.
+- Le salaire (qui n'est pas une opération du journal) est crédité au compte courant principal chaque jour de paie.
+- L'écart de rapprochement devient une opération « Ajustement » hors enveloppe : elle touche le reste à vivre (c'est presque toujours une dépense oubliée), avec « Annuler ».
+- Le solde des réglages (« au début du mois ») devient le solde de départ du compte courant ; la trésorerie de l'agenda part du solde réel des comptes courants quand il est connu.
+- Abonnement repéré : au moins 3 paiements, même libellé, montant à ±10 %, rythme régulier (2 écarts sur 3 dans la plage). Ajouté sans repasser les paiements déjà au journal.
+- Préréglages bancaires construits d'après les formats publics connus (pas de vrais relevés disponibles) ; la détection automatique reste le choix par défaut.
 
 ## Phase 6 — Analyses et optimisation
 _À planifier._

@@ -149,6 +149,13 @@
 
         <div id="views">
           <section class="view" data-view="home" role="tabpanel">
+            <div class="favs" id="favs" hidden>
+              <div class="favs-head">
+                <h2>Favoris</h2>
+                <button type="button" class="link-btn" id="favs-manage"><i data-lucide="star"></i>Gérer</button>
+              </div>
+              <div class="favs-list" id="favs-list"></div>
+            </div>
             <div class="insights" id="insights"></div>
 
             <div class="section-head">
@@ -187,12 +194,27 @@
               <button type="button" class="icon-btn" id="j-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
             </div>
             <div class="tiles" id="j-summary"></div>
-            <div class="toolbar">
+            <div class="toolbar journal-tools">
+              <div class="search-wrap">
+                <i data-lucide="search"></i>
+                <label class="visually-hidden" for="j-search">Rechercher</label>
+                <input id="j-search" type="search" autocomplete="off" placeholder="Rechercher : texte, montant, #étiquette">
+              </div>
+              <div class="select-wrap" id="j-scope-wrap" hidden>
+                <label class="visually-hidden" for="j-scope">Période de recherche</label>
+                <select id="j-scope">
+                  <option value="month">Ce mois</option>
+                  <option value="3m">3 derniers mois</option>
+                  <option value="year">12 derniers mois</option>
+                  <option value="all">Tout</option>
+                </select>
+              </div>
               <div class="select-wrap">
                 <label class="visually-hidden" for="j-filter">Filtrer</label>
                 <select id="j-filter"></select>
               </div>
             </div>
+            <p class="muted small" id="j-results" hidden></p>
             <div id="j-list"></div>
             <div class="empty" id="j-empty">
               <span class="empty-icon" aria-hidden="true"><i data-lucide="receipt"></i></span>
@@ -300,6 +322,10 @@
               <h2>Échéancier</h2>
               <span class="rec-summary" id="rec-summary"></span>
             </div>
+            <div class="rec-tools">
+              <button type="button" class="btn ghost compact" id="rec-detect"><i data-lucide="radar"></i>Repérer mes abonnements</button>
+              <button type="button" class="btn ghost compact" id="rec-ics"><i data-lucide="calendar-plus"></i>Ajouter à mon calendrier</button>
+            </div>
             <div class="rec-list" id="rec-list"></div>
             <div class="empty compact" id="rec-empty">
               <span class="empty-icon" aria-hidden="true"><i data-lucide="repeat"></i></span>
@@ -369,6 +395,7 @@
           <input id="tx-amount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="0">
           <span>€</span>
         </div>
+        <div class="quick-amounts" id="tx-quick" aria-label="Montants fréquents"></div>
         <div class="scan-status" id="scan-status" hidden>
           <span class="scan-spinner" aria-hidden="true"></span>
           <span id="scan-text">Lecture du ticket…</span>
@@ -426,10 +453,22 @@
         <summary>Détail (articles, remarques)</summary>
         <textarea id="tx-detail" rows="4" maxlength="1500" placeholder="Ex : liste des articles du ticket"></textarea>
       </details>
+      <div class="field" id="tx-account-field" hidden>
+        <span class="field-label" id="tx-account-label">Compte</span>
+        <div class="chips" id="tx-accounts" role="radiogroup" aria-labelledby="tx-account-label"></div>
+      </div>
+      <div class="field" id="tx-tags-field">
+        <label for="tx-tags">Étiquettes (facultatif)</label>
+        <input id="tx-tags" type="text" maxlength="120" autocomplete="off" placeholder="Ex : vacances, cadeau">
+      </div>
       <div class="field" id="tx-proof-field">
         <span class="field-label" id="tx-proof-label">Justificatifs</span>
         <div class="proofs" id="tx-photos" aria-labelledby="tx-proof-label"></div>
       </div>
+      <label class="check-row" id="tx-fav-field" hidden>
+        <input type="checkbox" id="tx-fav">
+        <span><strong>Enregistrer en favori</strong><small>Pour l'ajouter ensuite en un toucher depuis l'accueil.</small></span>
+      </label>
       <label class="check-row" id="tx-pro-field" hidden>
         <input type="checkbox" id="tx-pro">
         <span><strong>Opération pro</strong><small>Comptée dans ton chiffre d'affaires ou tes frais de micro-entreprise.</small></span>
@@ -596,6 +635,90 @@
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-accounts" aria-labelledby="acc-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="acc-title">Comptes et rapprochement</h2>
+          <p>Compte courant, livret, espèces. Compare avec ta banque : « l'app dit X, ta banque dit Y ».</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="acc-list" id="acc-list"></div>
+      <p class="field-error" id="acc-error" role="alert" hidden></p>
+      <details class="detail-box" id="acc-transfer-box">
+        <summary>Virement entre comptes</summary>
+        <form class="acc-form" id="acc-transfer-form" novalidate>
+          <div class="money-input"><input id="acc-transfer-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="Montant" aria-label="Montant du virement"><span>€</span></div>
+          <div class="select-wrap"><select id="acc-transfer-from" aria-label="Depuis"></select></div>
+          <div class="select-wrap"><select id="acc-transfer-to" aria-label="Vers"></select></div>
+          <input id="acc-transfer-date" type="date" aria-label="Date du virement">
+          <button type="submit" class="btn primary compact">Virer</button>
+        </form>
+      </details>
+      <details class="detail-box" id="acc-new-box">
+        <summary>Ajouter un compte</summary>
+        <form class="acc-form" id="acc-new-form" novalidate>
+          <input id="acc-new-name" type="text" maxlength="40" autocomplete="off" placeholder="Nom (ex : Livret A)" aria-label="Nom du compte">
+          <div class="select-wrap"><select id="acc-new-kind" aria-label="Type de compte">
+            <option value="savings">Livret / épargne</option>
+            <option value="cash">Espèces</option>
+            <option value="current">Compte courant</option>
+          </select></div>
+          <div class="money-input"><input id="acc-new-balance" type="text" inputmode="decimal" autocomplete="off" placeholder="Solde actuel" aria-label="Solde actuel"><span>€</span></div>
+          <button type="submit" class="btn primary compact">Ajouter</button>
+        </form>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-subs" aria-labelledby="subs-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="subs-title">Abonnements repérés</h2>
+          <p>Des paiements qui reviennent au même rythme. Ajoute-les à l'échéancier pour les prévoir.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="subs-list" id="subs-list"></div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-favs" aria-labelledby="favs-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="favs-title">Favoris</h2>
+          <p>Tes saisies habituelles, en un toucher. Coche « Enregistrer en favori » en ajoutant une dépense pour en créer.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="favs-manage-list" id="favs-manage-list"></div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-shortcut" aria-labelledby="shortcut-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="shortcut-title">Raccourcis et rappels</h2>
+          <p>Sans serveur : ton téléphone fait le travail.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <h3 class="small-title">Raccourci « Ajouter une dépense »</h3>
+      <p class="muted small">Sur iPhone : app Raccourcis → nouveau raccourci → action « Ouvrir l'URL » avec ce lien, puis « Ajouter à l'écran d'accueil ». L'app s'ouvre directement sur la saisie.</p>
+      <div class="copy-row">
+        <input id="shortcut-url" type="text" readonly aria-label="Lien du raccourci">
+        <button type="button" class="btn ghost compact" id="shortcut-copy"><i data-lucide="copy"></i>Copier</button>
+      </div>
+      <h3 class="small-title">Rappels de paiements</h3>
+      <p class="muted small">Exporte tes échéances vers le calendrier de ton téléphone : il t'enverra de vraies notifications la veille, même app fermée.</p>
+      <button type="button" class="btn primary block" id="shortcut-ics"><i data-lucide="calendar-plus"></i>Exporter les échéances (.ics)</button>
+    </div>
   </dialog>
 
   <dialog class="sheet wide" id="dlg-crop" aria-labelledby="crop-title">
@@ -979,8 +1102,13 @@
         </div>
         <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
       </header>
+      <div class="field">
+        <label for="imp-preset">Banque</label>
+        <div class="select-wrap"><select id="imp-preset"></select></div>
+      </div>
       <p class="hint">Lecture 100 % locale. Vérifie l'enveloppe de chaque ligne : BudgetFold retient tes choix pour la prochaine fois.</p>
       <div class="import-list" id="imp-list"></div>
+      <div class="imp-subs" id="imp-subs" hidden></div>
       <p class="field-error" id="imp-error" role="alert" hidden></p>
       <div class="sheet-actions">
         <button type="button" class="btn ghost" id="imp-cancel">Annuler</button>
@@ -1021,6 +1149,18 @@
           <button type="button" class="menu-item" id="menu-reset-all">
             <span class="menu-ico"><i data-lucide="rotate-ccw"></i></span>
             <span><strong>Remettre toutes les enveloppes à zéro</strong><small>Les dépenses restent dans le journal</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-accounts">
+            <span class="menu-ico"><i data-lucide="landmark"></i></span>
+            <span><strong>Comptes et rapprochement</strong><small>Livret, espèces, virements, comparer avec ta banque</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-shortcut">
+            <span class="menu-ico"><i data-lucide="bell"></i></span>
+            <span><strong>Raccourcis et rappels</strong><small>Raccourci iPhone, échéances dans ton calendrier</small></span>
           </button>
         </li>
         <li>
