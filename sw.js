@@ -1,10 +1,13 @@
-const CACHE = 'budgetfold-os-v3';
+// Service worker : app hors ligne. Une nouvelle version attend que l'utilisateur choisisse « Mettre à jour ».
+const CACHE = 'budgetfold-os-1.0.0';
 const CORE = ['./', './index.html', './style.css', './script.js', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(CORE)).then(() => self.skipWaiting())
-  );
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(CORE)));
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {

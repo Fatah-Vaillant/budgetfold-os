@@ -43,6 +43,7 @@ function localFor(u) {
   if ((m = /tesseract\.js-core@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/tesseract.js-core/${m[1]}`;
   if ((m = /@tesseract\.js-data\/fra@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/@tesseract.js-data/fra/${m[1]}`;
   if ((m = /pdfjs-dist@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/pdfjs-dist/${m[1]}`;
+  if ((m = /qrcode-generator@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/qrcode-generator/${m[1]}`;
   return null;
 }
 

@@ -368,8 +368,7 @@
     </main>
 
     <footer class="footnote">
-      <i data-lucide="lock"></i>
-      Tes données restent sur cet appareil. Aucun serveur, aucun suivi.
+      <button type="button" class="link-btn" id="foot-privacy"><i data-lucide="lock"></i>Tes données restent sur cet appareil. Aucun serveur, aucun suivi.</button>
     </footer>
   </div>
 
@@ -643,6 +642,99 @@
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-password" aria-labelledby="pw-title">
+    <form id="pw-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="pw-title">Mot de passe</h2>
+          <p id="pw-text"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="field">
+        <label for="pw-input">Mot de passe</label>
+        <input id="pw-input" type="password" autocomplete="off">
+      </div>
+      <p class="field-error" id="pw-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Ouvrir</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-security" aria-labelledby="sec-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="sec-title">Sécurité et appareils</h2>
+          <p>Verrou de l'app, sauvegarde chiffrée, passage sur un autre appareil. Toujours sans serveur.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <h3 class="small-title">Verrou de l'app</h3>
+      <p class="muted small" id="sec-lock-state"></p>
+      <form class="acc-form" id="sec-pin-form" novalidate>
+        <input id="sec-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="Code (4 à 8 chiffres)" aria-label="Nouveau code">
+        <input id="sec-pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="Répète le code" aria-label="Répète le code">
+        <button type="submit" class="btn primary compact" id="sec-pin-set">Choisir un code</button>
+      </form>
+      <div class="sec-row">
+        <button type="button" class="btn ghost compact" id="sec-pin-off" hidden><i data-lucide="lock-open"></i>Retirer le code</button>
+        <span id="sec-bio-row" hidden><button type="button" class="btn ghost compact" id="sec-bio"><i data-lucide="scan-face"></i>Activer Face ID / empreinte</button></span>
+      </div>
+      <p class="muted small">Le code empêche d'ouvrir l'app sur cet appareil ; il est haché, jamais stocké en clair. Il demande à nouveau le code après une minute en arrière-plan.</p>
+      <h3 class="small-title">Sauvegarde chiffrée et transfert</h3>
+      <div class="field">
+        <label for="sec-password">Mot de passe de la sauvegarde (8 caractères au moins)</label>
+        <input id="sec-password" type="password" autocomplete="new-password">
+      </div>
+      <div class="sec-row">
+        <button type="button" class="btn primary compact" id="sec-export"><i data-lucide="file-lock"></i>Exporter chiffré (.bfold)</button>
+        <button type="button" class="btn ghost compact" id="sec-qr"><i data-lucide="qr-code"></i>Envoyer par QR code</button>
+      </div>
+      <p class="muted small">Pour restaurer : menu › Importer une sauvegarde, puis le mot de passe. Sans le mot de passe, personne (pas même toi) ne peut relire le fichier.</p>
+      <div class="qr-box" id="sec-qr-box" hidden>
+        <div class="qr-img" id="sec-qr-img"></div>
+        <p class="muted small">Scanne ce code avec l'appareil photo de l'autre téléphone : BudgetFold s'ouvre et demande le mot de passe. Les photos ne passent pas par le QR code : utilise la sauvegarde chiffrée pour elles.</p>
+        <div class="copy-row">
+          <input id="sec-qr-link" type="text" readonly aria-label="Lien de transfert">
+          <button type="button" class="btn ghost compact" id="sec-qr-copy"><i data-lucide="copy"></i>Copier</button>
+        </div>
+      </div>
+      <p class="field-error" id="sec-error" role="alert" hidden></p>
+    </div>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-privacy" aria-labelledby="privacy-title">
+    <div class="sheet-body privacy">
+      <header class="sheet-head">
+        <div>
+          <h2 id="privacy-title">Confidentialité</h2>
+          <p>Ce que BudgetFold garde, où, et comment tout effacer.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <p class="hint" id="privacy-usage"></p>
+      <h3 class="small-title">Ce qui est stocké</h3>
+      <ul>
+        <li>Ton budget, tes opérations, tes projets et tes réglages, dans le stockage local de ce navigateur (clé <code>budgetfold-os:v4</code> ; les clés des anciennes versions sont gardées pour ne rien perdre).</li>
+        <li>Les photos et PDF de tes justificatifs, dans la base locale du navigateur (IndexedDB <code>budgetfold-photos</code>).</li>
+        <li>Les fichiers de l'app, en cache, pour qu'elle marche hors ligne.</li>
+      </ul>
+      <h3 class="small-title">Où</h3>
+      <p>Uniquement sur cet appareil. Aucun compte, aucun serveur BudgetFold, aucun traceur, aucune publicité. Tes exports restent des fichiers que toi seul déplaces.</p>
+      <h3 class="small-title">Ce qui est chargé en ligne</h3>
+      <p>La police Inter (Google Fonts), les icônes (Lucide, unpkg), et à la demande le moteur de lecture des tickets (Tesseract), le lecteur de PDF (pdf.js) et le générateur de QR code (jsdelivr). Comme pour tout site, ces services voient ton adresse IP au téléchargement ; aucune donnée de ton budget ne leur est envoyée.</p>
+      <h3 class="small-title">Tes droits (RGPD)</h3>
+      <p>Tes données ne quittent pas ton appareil : tu en gardes le contrôle total. Exporte-les quand tu veux (menu › Exporter), et efface tout d'un geste ci-dessous. Le verrou par code protège l'accès à l'app, mais une personne qui maîtrise les outils du navigateur sur ton appareil déverrouillé pourrait lire les données : garde ton téléphone verrouillé.</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Fermer</button>
+        <button type="button" class="btn ghost danger-text" id="privacy-wipe"><i data-lucide="trash-2"></i>Tout effacer</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog class="sheet wide" id="dlg-help" aria-labelledby="help-title">
@@ -1183,6 +1275,18 @@
           </button>
         </li>
         <li>
+          <button type="button" class="menu-item" id="menu-security">
+            <span class="menu-ico"><i data-lucide="shield"></i></span>
+            <span><strong>Sécurité et appareils</strong><small>Code, Face ID, sauvegarde chiffrée, QR code</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-privacy">
+            <span class="menu-ico"><i data-lucide="eye-off"></i></span>
+            <span><strong>Confidentialité</strong><small>Ce qui est stocké, où, comment tout effacer</small></span>
+          </button>
+        </li>
+        <li>
           <button type="button" class="menu-item" id="menu-accounts">
             <span class="menu-ico"><i data-lucide="landmark"></i></span>
             <span><strong>Comptes et rapprochement</strong><small>Livret, espèces, virements, comparer avec ta banque</small></span>
@@ -1235,7 +1339,7 @@
     </div>
   </dialog>
 
-  <input type="file" id="import-file" accept="application/json,.json,application/zip,.zip" hidden>
+  <input type="file" id="import-file" accept="application/json,.json,application/zip,.zip,.bfold" hidden>
   <input type="file" id="photo-file" accept="image/*,application/pdf" multiple hidden>
   <input type="file" id="photo-replace-file" accept="image/*,application/pdf" hidden>
   <input type="file" id="csv-file" accept=".csv,.txt,text/csv,text/plain" hidden>
@@ -1254,6 +1358,26 @@
       </div>
     </div>
   </div>
+  <div class="update-bar" id="update-bar" role="status" hidden>
+    <i data-lucide="sparkles"></i>
+    <span>Nouvelle version de BudgetFold disponible.</span>
+    <button type="button" class="btn primary compact" id="update-go">Mettre à jour</button>
+    <button type="button" class="icon-btn small" id="update-later" aria-label="Plus tard"><i data-lucide="x"></i></button>
+  </div>
+
+  <div class="lock" id="lock" hidden>
+    <form class="lock-card" id="lock-form" novalidate>
+      <span class="welcome-badge" aria-hidden="true"><i data-lucide="lock"></i></span>
+      <h2 id="lock-title">BudgetFold est verrouillé</h2>
+      <p class="muted">Saisis ton code pour ouvrir tes comptes.</p>
+      <input id="lock-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" aria-labelledby="lock-title" placeholder="••••">
+      <p class="field-error" id="lock-error" role="alert" hidden></p>
+      <button type="submit" class="btn primary block">Déverrouiller</button>
+      <button type="button" class="btn ghost block" id="lock-bio" hidden><i data-lucide="scan-face"></i>Face ID / empreinte</button>
+      <button type="button" class="link-btn" id="lock-forgot">Code oublié ?</button>
+    </form>
+  </div>
+
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>

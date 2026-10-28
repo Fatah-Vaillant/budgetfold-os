@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 8 — Données, sécurité et plusieurs appareils**
+**Phase 9 — Qualité et finition**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -179,7 +179,27 @@ Décisions de la phase 7 :
 - Le gris secondaire du thème clair passe de #94a3b8 à #718096 : l'ancien n'atteignait pas un contraste de 3 sur blanc.
 
 ## Phase 8 — Données, sécurité et plusieurs appareils
-_À planifier._
+Plan :
+1. Chiffrement WebCrypto : AES-GCM 256, clé PBKDF2-SHA-256 (310 000 itérations), sel et IV aléatoires ; fichier `.bfold` contenant la sauvegarde complète (zip avec photos).
+2. Verrou : code PIN haché (PBKDF2, jamais en clair), Face ID / empreinte par WebAuthn (authentificateur de l'appareil) ; reverrouillage après une minute en arrière-plan ; « code oublié » = tout effacer puis restaurer.
+3. Transfert par QR code : données sans photos, compressées puis chiffrées, dans le fragment d'un lien `#import=…` (jamais envoyé au serveur) ; QR généré par qrcode-generator 1.4.4 (version figée, chargé à la demande).
+4. Service worker : la nouvelle version attend ; bandeau « Mettre à jour » ; cache versionné.
+5. Page Confidentialité ; « Tout effacer » supprime aussi les anciennes clés, les photos et le cache.
+
+- [x] Export chiffré par mot de passe (WebCrypto AES-GCM), import et restauration
+- [x] Verrou de l'app (code PIN haché ; Face ID via WebAuthn si disponible)
+- [x] Passer d'un appareil à l'autre sans serveur (fichier chiffré ou QR code)
+- [x] Annonce « Nouvelle version disponible » avec bouton de mise à jour
+- [x] Chaîne de migrations v1 → v4 testée, champ `v` toujours présent
+- [x] Page Confidentialité (ce qui est stocké, où, comment tout effacer)
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 8 :
+- Le verrou protège l'ouverture de l'app, pas le stockage du navigateur : c'est écrit honnêtement dans la page Confidentialité. Les sauvegardes chiffrées, elles, sont illisibles sans le mot de passe.
+- WebAuthn sans serveur : on demande au système de vérifier l'utilisateur (Face ID, empreinte) ; la signature n'est pas vérifiée côté serveur puisqu'il n'y en a pas. C'est un confort, le code reste la protection de base.
+- Importer une sauvegarde garde le verrou de l'appareil qui l'importe (Face ID est propre à chaque téléphone).
+- Le QR code est limité à 2 300 caractères ; au-delà, on propose le fichier chiffré. Les photos ne passent jamais par le QR.
+- Nouvelle dépendance à la demande : qrcode-generator 1.4.4 (jsdelivr, version figée), installée en `devDependencies` pour les tests.
 
 ## Phase 9 — Qualité et finition
 _À planifier._

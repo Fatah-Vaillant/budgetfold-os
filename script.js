@@ -240,7 +240,8 @@
       // Micro-entreprise : taux de cotisations et seuils saisis par l'utilisateur (aucune valeur par défaut).
       pro: { enabled: false, rateBp: 0, ceiling: null, vatThreshold: null },
       lastAccountId: null, lastReminder: null,
-      theme: 'auto', textLarge: false, tourDone: false
+      theme: 'auto', textLarge: false, tourDone: false,
+      lock: { enabled: false, salt: null, hash: null, credId: null }
     }
   });
   const THEMES = { auto: 'Auto', light: 'Clair', dark: 'Sombre', rose: 'Rose pastel', candy: 'Rose bonbon' };
@@ -470,6 +471,11 @@
     s.prefs.theme = THEMES[rp.theme] ? rp.theme : 'auto';
     s.prefs.textLarge = Boolean(rp.textLarge);
     s.prefs.tourDone = Boolean(rp.tourDone);
+    const lk = rp.lock || {};
+    const b64ok = (v) => typeof v === 'string' && /^[A-Za-z0-9+/=]{8,200}$/.test(v);
+    s.prefs.lock = lk.enabled && b64ok(lk.salt) && b64ok(lk.hash)
+      ? { enabled: true, salt: lk.salt, hash: lk.hash, credId: b64ok(lk.credId) ? lk.credId : null }
+      : { enabled: false, salt: null, hash: null, credId: null };
     return s;
   }
 
@@ -2954,7 +2960,11 @@
     'r-days', 'r-notes', 'dlg-welcome', 'w-progress', 'w-step-label', 'w-body', 'w-next', 'w-skip', 'w-back',
     'w-error', 'dlg-help', 'help-list', 'help-tour', 'help-wizard', 'tour', 'tour-hole', 'tour-bubble', 'tour-title', 'tour-text',
     'tour-step', 'tour-skip', 'tour-next', 'set-theme', 'set-text-large', 'menu-help', 'tx-repeat-pills', 'tx-date-chips',
-    'env-period-pills', 'env-deadline-hint', 'dlg-tx', 'tx-form', 'tx-title', 'tx-sub', 'tx-mode', 'tx-scan', 'scan-status', 'scan-text', 'tx-amount',
+    'env-period-pills', 'env-deadline-hint', 'dlg-password', 'pw-form', 'pw-text', 'pw-input', 'pw-error', 'lock', 'lock-form', 'lock-pin',
+    'lock-error', 'lock-bio', 'lock-forgot', 'dlg-security', 'sec-lock-state', 'sec-pin-form', 'sec-pin', 'sec-pin2', 'sec-pin-set',
+    'sec-pin-off', 'sec-bio-row', 'sec-bio', 'sec-password', 'sec-export', 'sec-qr', 'sec-qr-box', 'sec-qr-img', 'sec-qr-link',
+    'sec-qr-copy', 'sec-error', 'menu-security', 'dlg-privacy', 'privacy-usage', 'privacy-wipe', 'menu-privacy', 'foot-privacy',
+    'update-bar', 'update-go', 'update-later', 'dlg-tx', 'tx-form', 'tx-title', 'tx-sub', 'tx-mode', 'tx-scan', 'scan-status', 'scan-text', 'tx-amount',
     'tx-label', 'tx-label-title', 'tx-env-field', 'tx-env-label', 'tx-chips', 'tx-covers-field', 'tx-covers', 'tx-covers-text', 'tx-date', 'tx-date-label', 'tx-repeat-field',
     'tx-repeat', 'tx-until-field', 'tx-until', 'tx-detail-box', 'tx-detail', 'tx-series', 'tx-series-text', 'tx-series-edit',
     'tx-hint', 'tx-error', 'tx-delete', 'tx-submit', 'dlg-env', 'env-form', 'env-title', 'env-sub', 'env-kind-wrap',
@@ -6594,46 +6604,425 @@
     toast('Sauvegarde exportée.');
   }
 
+  // ——— Import d'une sauvegarde : .json, .zip (avec photos) ou fichier chiffré ———
   async function importJson(file) {
     try {
-      let raw;
-      let entries = null;
-      if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
-        entries = await readZip(await file.arrayBuffer());
-        const json = entries.get('budgetfold.json');
-        if (!json) throw new Error('invalid');
-        raw = JSON.parse(new TextDecoder().decode(json));
-      } else {
-        raw = JSON.parse(await file.text());
-      }
-      const parsed = fromAnyVersion(raw);
-      if (!parsed || (parsed.salary <= 0 && !parsed.envelopes.length)) throw new Error('invalid');
-      const confirmed = await confirmAction({
-        title: 'Importer cette sauvegarde ?',
-        text: `${parsed.envelopes.length} ${plural(parsed.envelopes.length, 'enveloppe', 'enveloppes')}, ${parsed.transactions.length} ${plural(parsed.transactions.length, 'opération', 'opérations')}. Tes données actuelles seront remplacées.`,
-        confirmLabel: 'Importer'
-      });
-      if (!confirmed) return;
-      if (entries) {
-        const meta = raw.photos || {};
-        for (const [name, data] of entries) {
-          const m = /^photos\/([\w-]+)\.(jpg|pdf)$/.exec(name);
-          if (!m) continue;
-          const info = meta[m[1]] || {};
-          const type = m[2] === 'pdf' ? 'application/pdf' : 'image/jpeg';
-          await Photos.put({ id: m[1], blob: new Blob([data], { type }), type, w: info.w || 0, h: info.h || 0, size: data.length, name: info.name || '', createdAt: info.createdAt || clock.now() });
+      let text = null;
+      let bytes = null;
+      if (/\.zip$/i.test(file.name) || file.type === 'application/zip') bytes = new Uint8Array(await file.arrayBuffer());
+      else text = await file.text();
+      if (text !== null) {
+        const raw = JSON.parse(text);
+        if (raw && raw.format === CRYPT_FORMAT) {
+          const plain = await askPasswordAndDecrypt(raw, 'Cette sauvegarde est chiffrée. Saisis le mot de passe choisi à l\'export.');
+          if (!plain) return;
+          if (raw.content === 'zip') bytes = plain;
+          else return importPayload(JSON.parse(new TextDecoder().decode(plain)), null);
+        } else {
+          return importPayload(raw, null);
         }
       }
-      state = parsed;
-      state.prefs.onboarded = true;
-      announceCredits(runRollover());
-      postRecurring();
-      commit();
-      toast('Sauvegarde importée.');
+      const entries = await readZip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      const json = entries.get('budgetfold.json');
+      if (!json) throw new Error('invalid');
+      return importPayload(JSON.parse(new TextDecoder().decode(json)), entries);
     } catch {
       toast("Ce fichier n'est pas une sauvegarde BudgetFold valide.", 'error');
     }
   }
+
+  async function importPayload(raw, entries) {
+    const parsed = fromAnyVersion(raw);
+    if (!parsed || (parsed.salary <= 0 && !parsed.envelopes.length)) return toast("Ce fichier n'est pas une sauvegarde BudgetFold valide.", 'error');
+    const confirmed = await confirmAction({
+      title: 'Importer cette sauvegarde ?',
+      text: `${parsed.envelopes.length} ${plural(parsed.envelopes.length, 'enveloppe', 'enveloppes')}, ${parsed.transactions.length} ${plural(parsed.transactions.length, 'opération', 'opérations')}. Tes données actuelles seront remplacées.`,
+      confirmLabel: 'Importer'
+    });
+    if (!confirmed) return;
+    if (entries) {
+      const meta = raw.photos || {};
+      for (const [name, data] of entries) {
+        const m = /^photos\/([\w-]+)\.(jpg|pdf)$/.exec(name);
+        if (!m) continue;
+        const info = meta[m[1]] || {};
+        const type = m[2] === 'pdf' ? 'application/pdf' : 'image/jpeg';
+        await Photos.put({ id: m[1], blob: new Blob([data], { type }), type, w: info.w || 0, h: info.h || 0, size: data.length, name: info.name || '', createdAt: info.createdAt || clock.now() });
+      }
+    }
+    const keepLock = state.prefs.lock;
+    state = parsed;
+    state.prefs.onboarded = true;
+    // Le verrou reste celui de cet appareil (Face ID est propre à chaque téléphone).
+    state.prefs.lock = keepLock;
+    announceCredits(runRollover());
+    postRecurring();
+    applyTheme();
+    commit();
+    toast('Sauvegarde importée.');
+  }
+
+  // ——— Chiffrement (WebCrypto) : AES-GCM 256 bits, clé dérivée du mot de passe par PBKDF2-SHA-256 ———
+  const CRYPT_FORMAT = 'budgetfold-encrypted';
+  const KDF_ITERATIONS = 310000;
+  const b64 = (bytes) => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const unb64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+  const b64url = (bytes) => b64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64url = (str) => unb64(str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4));
+  const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+  async function deriveKey(password, salt, iterations) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  async function encryptBytes(bytes, password, content) {
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = await deriveKey(password, salt, KDF_ITERATIONS);
+    const data = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+    return { app: 'BudgetFold OS', format: CRYPT_FORMAT, version: 1, cipher: 'AES-GCM', kdf: 'PBKDF2-SHA256', iterations: KDF_ITERATIONS, salt: b64(salt), iv: b64(iv), content, data: b64(data) };
+  }
+
+  async function decryptBytes(env, password) {
+    const key = await deriveKey(password, unb64(env.salt), clampInt(env.iterations, 1000, 10000000, KDF_ITERATIONS));
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data)));
+  }
+
+  const passwordIssue = (pw) => (pw.length < 8 ? 'Choisis un mot de passe d\'au moins 8 caractères.' : null);
+
+  // Sauvegarde complète (données et photos) chiffrée par mot de passe.
+  async function encryptedBackup(password) {
+    const issue = passwordIssue(password);
+    if (issue) return fail(issue);
+    const zip = new Uint8Array(await (await fullBackupZip()).arrayBuffer());
+    const env = await encryptBytes(zip, password, 'zip');
+    return ok(new Blob([JSON.stringify(env)], { type: 'application/json' }));
+  }
+
+  // Demande le mot de passe (feuille dédiée) puis déchiffre ; null si l'utilisateur annule.
+  function askPasswordAndDecrypt(env, text) {
+    return new Promise((resolve) => {
+      els.pwText.textContent = text;
+      els.pwInput.value = '';
+      hideError(els.pwError);
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; els.pwForm.onsubmit = null; resolve(v); } };
+      els.pwForm.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const plain = await decryptBytes(env, els.pwInput.value);
+          closeDialog(els.dlgPassword);
+          finish(plain);
+        } catch {
+          showError(els.pwError, 'Mot de passe incorrect.');
+        }
+      };
+      els.dlgPassword.addEventListener('close', () => finish(null), { once: true });
+      openDialog(els.dlgPassword);
+      requestAnimationFrame(() => els.pwInput.focus());
+    });
+  }
+
+  // ——— Transfert vers un autre appareil par QR code (sans serveur) ———
+  // Les données (sans photos) sont compressées, chiffrées, et mises dans le fragment d'un lien (#import=…),
+  // qui n'est jamais envoyé au serveur : on scanne le QR avec l'appareil photo de l'autre téléphone.
+  const QR_MAX = 2300;
+  const QRLIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
+  async function deflate(bytes) {
+    return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+  }
+  async function inflate(bytes) {
+    return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+  }
+  async function transferLink(password) {
+    const issue = passwordIssue(password);
+    if (issue) return fail(issue);
+    const json = new TextEncoder().encode(JSON.stringify({ ...state, transactions: state.transactions.map(({ photos, ...t }) => t) }));
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = await deriveKey(password, salt, KDF_ITERATIONS);
+    const data = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, await deflate(json)));
+    const packed = new Uint8Array(28 + data.length);
+    packed.set(salt, 0);
+    packed.set(iv, 16);
+    packed.set(data, 28);
+    const url = `${location.origin}${location.pathname}#import=${b64url(packed)}`;
+    if (url.length > QR_MAX) return fail(`Trop de données pour un QR code (${Math.round(url.length / 100) / 10} k caractères). Utilise plutôt la sauvegarde chiffrée (fichier).`);
+    return ok(url);
+  }
+  async function readTransfer(code, password) {
+    const packed = unb64url(code);
+    const key = await deriveKey(password, packed.slice(0, 16), KDF_ITERATIONS);
+    const plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packed.slice(16, 28) }, key, packed.slice(28)));
+    return JSON.parse(new TextDecoder().decode(await inflate(plain)));
+  }
+  async function qrSvg(text) {
+    if (!window.qrcode) await loadScript(QRLIB);
+    const qr = window.qrcode(0, 'L');
+    qr.addData(text);
+    qr.make();
+    return qr.createSvgTag({ cellSize: 3, margin: 3, scalable: true, alt: 'QR code de transfert' });
+  }
+
+  async function receiveTransfer(code) {
+    els.pwText.textContent = 'Des données arrivent d\'un autre appareil. Saisis le mot de passe choisi pour le transfert.';
+    els.pwInput.value = '';
+    hideError(els.pwError);
+    const raw = await new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; els.pwForm.onsubmit = null; resolve(v); } };
+      els.pwForm.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const data = await readTransfer(code, els.pwInput.value);
+          closeDialog(els.dlgPassword);
+          finish(data);
+        } catch {
+          showError(els.pwError, 'Mot de passe incorrect, ou lien abîmé.');
+        }
+      };
+      els.dlgPassword.addEventListener('close', () => finish(null), { once: true });
+      openDialog(els.dlgPassword);
+    });
+    if (raw) await importPayload(raw, null);
+  }
+
+  // ——— Verrou de l'app : code PIN (haché, jamais stocké en clair) et Face ID / empreinte (WebAuthn) ———
+  const PIN_ITERATIONS = 150000;
+  async function hashPin(pin, salt) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+    return b64(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: PIN_ITERATIONS, hash: 'SHA-256' }, base, 256)));
+  }
+
+  async function setPin(pin) {
+    if (!/^\d{4,8}$/.test(pin || '')) return fail('Choisis un code de 4 à 8 chiffres.');
+    const salt = randomBytes(16);
+    state.prefs.lock = { ...state.prefs.lock, enabled: true, salt: b64(salt), hash: await hashPin(pin, salt) };
+    save();
+    return ok();
+  }
+
+  async function checkPin(pin) {
+    const lock = state.prefs.lock;
+    if (!lock.enabled || !lock.hash) return true;
+    return (await hashPin(String(pin || ''), unb64(lock.salt))) === lock.hash;
+  }
+
+  function disableLock() {
+    state.prefs.lock = { enabled: false, salt: null, hash: null, credId: null };
+    save();
+  }
+
+  const biometricAvailable = async () => {
+    try {
+      return Boolean(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+    } catch {
+      return false;
+    }
+  };
+
+  // Face ID / empreinte : une clé locale est créée sur l'appareil ; la déverrouiller demande la vérification du système.
+  async function enableBiometric() {
+    if (!state.prefs.lock.enabled) return fail('Choisis d\'abord un code.');
+    if (!(await biometricAvailable())) return fail('Face ID ou l\'empreinte ne sont pas disponibles sur cet appareil.');
+    try {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomBytes(32), rp: { name: 'BudgetFold' }, user: { id: randomBytes(16), name: 'budgetfold', displayName: 'BudgetFold' },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+          authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' }, timeout: 60000
+        }
+      });
+      state.prefs.lock.credId = b64(new Uint8Array(cred.rawId));
+      save();
+      return ok();
+    } catch {
+      return fail('Activation annulée.');
+    }
+  }
+
+  async function unlockBiometric() {
+    const id = state.prefs.lock.credId;
+    if (!id) return false;
+    try {
+      await navigator.credentials.get({ publicKey: { challenge: randomBytes(32), allowCredentials: [{ type: 'public-key', id: unb64(id) }], userVerification: 'required', timeout: 60000 } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const lockUi = { hiddenAt: 0 };
+  const LOCK_AFTER_MS = 60000;
+  function lockApp() {
+    if (!state.prefs.lock.enabled) return;
+    els.lock.hidden = false;
+    document.querySelector('.app-shell').inert = true;
+    els.lockPin.value = '';
+    hideError(els.lockError);
+    els.lockBio.hidden = !state.prefs.lock.credId;
+    document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+    requestAnimationFrame(() => els.lockPin.focus());
+  }
+  function unlockApp() {
+    els.lock.hidden = true;
+    document.querySelector('.app-shell').inert = false;
+  }
+  const isLocked = () => !els.lock.hidden;
+
+  els.lockForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (await checkPin(els.lockPin.value)) return unlockApp();
+    els.lockPin.value = '';
+    showError(els.lockError, 'Code incorrect.');
+  });
+  els.lockBio.addEventListener('click', async () => {
+    if (await unlockBiometric()) unlockApp();
+    else showError(els.lockError, 'Vérification annulée : saisis ton code.');
+  });
+  els.lockForgot.addEventListener('click', async () => {
+    const sure = await confirmAction({
+      title: 'Code oublié ?',
+      text: 'Le code protège l\'accès à l\'app sur cet appareil. Sans lui, la seule solution est de tout effacer, puis de restaurer une sauvegarde (fichier ou chiffrée).',
+      confirmLabel: 'Tout effacer',
+      danger: true
+    });
+    if (!sure) return;
+    await wipeEverything();
+    unlockApp();
+    openWelcome();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) lockUi.hiddenAt = Date.now();
+    else if (state.prefs.lock.enabled && lockUi.hiddenAt && Date.now() - lockUi.hiddenAt > LOCK_AFTER_MS) lockApp();
+  });
+
+  // ——— Tout effacer : données, photos, ancien stockage, cache hors ligne ———
+  async function wipeEverything() {
+    for (const k of [STORAGE_KEY, V3_KEY, V2_KEY, LEGACY_KEY]) {
+      try { localStorage.removeItem(k); } catch { /* bloqué */ }
+    }
+    try {
+      if (photoDb) (await photoDb).close();
+      photoDb = null;
+      await new Promise((resolve) => { const r = indexedDB.deleteDatabase(PHOTO_DB); r.onsuccess = r.onerror = r.onblocked = () => resolve(); });
+    } catch { /* indisponible */ }
+    try {
+      if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    } catch { /* indisponible */ }
+    photoUrls.forEach((url) => URL.revokeObjectURL(url));
+    photoUrls.clear();
+    state = emptyState();
+    applyTheme();
+    commit();
+  }
+
+  // ——— Feuille « Sécurité et appareils » ———
+  async function openSecurity() {
+    closeDialog(els.dlgMenu);
+    renderSecurity();
+    openDialog(els.dlgSecurity);
+    els.secBioRow.hidden = !(await biometricAvailable()) || !state.prefs.lock.enabled;
+  }
+  function renderSecurity() {
+    const lock = state.prefs.lock;
+    els.secLockState.textContent = lock.enabled ? `Code activé${lock.credId ? ' · Face ID / empreinte activé' : ''}.` : 'Pas de code : l\'app s\'ouvre directement.';
+    els.secPinSet.textContent = lock.enabled ? 'Changer le code' : 'Choisir un code';
+    els.secPinOff.hidden = !lock.enabled;
+    els.secBio.textContent = lock.credId ? 'Face ID / empreinte activé' : 'Activer Face ID / empreinte';
+    els.secBio.disabled = Boolean(lock.credId);
+    els.secQrBox.hidden = true;
+    hideError(els.secError);
+  }
+  els.secPinForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (els.secPin.value !== els.secPin2.value) return showError(els.secError, 'Les deux codes ne sont pas identiques.');
+    const res = await setPin(els.secPin.value);
+    if (!res.ok) return showError(els.secError, res.error);
+    els.secPin.value = '';
+    els.secPin2.value = '';
+    renderSecurity();
+    els.secBioRow.hidden = !(await biometricAvailable());
+    toast('Code enregistré : il sera demandé à l\'ouverture.');
+  });
+  els.secPinOff.addEventListener('click', async () => {
+    const sure = await confirmAction({ title: 'Retirer le code ?', text: 'L\'app s\'ouvrira sans code sur cet appareil.', confirmLabel: 'Retirer' });
+    if (!sure) return;
+    disableLock();
+    renderSecurity();
+    els.secBioRow.hidden = true;
+    toast('Code retiré.');
+  });
+  els.secBio.addEventListener('click', async () => {
+    const res = await enableBiometric();
+    if (!res.ok) return showError(els.secError, res.error);
+    renderSecurity();
+    toast('Face ID / empreinte activé.');
+  });
+  els.secExport.addEventListener('click', async () => {
+    const res = await encryptedBackup(els.secPassword.value);
+    if (!res.ok) return showError(els.secError, res.error);
+    hideError(els.secError);
+    download(res.data, `budgetfold-${clock.today()}.bfold`);
+    state.prefs.lastExport = clock.today();
+    commit();
+    els.secPassword.value = '';
+    toast('Sauvegarde chiffrée exportée. Garde bien le mot de passe : sans lui, impossible de la relire.');
+  });
+  els.secQr.addEventListener('click', async () => {
+    const res = await transferLink(els.secPassword.value);
+    if (!res.ok) return showError(els.secError, res.error);
+    hideError(els.secError);
+    try {
+      els.secQrImg.innerHTML = await qrSvg(res.data);
+    } catch {
+      els.secQrImg.textContent = 'QR code indisponible hors ligne : copie le lien.';
+    }
+    els.secQrLink.value = res.data;
+    els.secQrBox.hidden = false;
+  });
+  els.secQrCopy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(els.secQrLink.value);
+      toast('Lien copié.');
+    } catch {
+      els.secQrLink.select();
+    }
+  });
+  els.menuSecurity.addEventListener('click', openSecurity);
+
+  // ——— Confidentialité ———
+  function openPrivacy() {
+    closeDialog(els.dlgMenu);
+    let size = 0;
+    try { size = (localStorage.getItem(STORAGE_KEY) || '').length; } catch { /* bloqué */ }
+    const photos = new Set(state.transactions.flatMap((t) => t.photos || [])).size;
+    els.privacyUsage.textContent = `Sur cet appareil : ${Math.round(size / 1024)} Ko de données, ${photos} ${plural(photos, 'justificatif', 'justificatifs')}.`;
+    openDialog(els.dlgPrivacy);
+  }
+  els.menuPrivacy.addEventListener('click', openPrivacy);
+  els.footPrivacy.addEventListener('click', openPrivacy);
+  els.privacyWipe.addEventListener('click', () => {
+    closeDialog(els.dlgPrivacy);
+    els.menuWipe.click();
+  });
+
+  // ——— Nouvelle version (service worker) ———
+  let waitingWorker = null;
+  function showUpdate(worker) {
+    waitingWorker = worker;
+    els.updateBar.hidden = false;
+  }
+  els.updateGo.addEventListener('click', () => {
+    els.updateBar.hidden = true;
+    if (waitingWorker) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+  });
+  els.updateLater.addEventListener('click', () => { els.updateBar.hidden = true; });
 
   function announceCredits(credits) {
     if (!credits || !credits.size) return;
@@ -6805,14 +7194,13 @@
     closeDialog(els.dlgMenu);
     const confirmed = await confirmAction({
       title: 'Tout effacer ?',
-      text: 'Ton salaire, tes enveloppes, ton journal et ton agenda seront définitivement supprimés de cet appareil.',
+      text: 'Ton budget, ton journal, tes projets, tes photos de justificatifs et le cache hors ligne seront définitivement supprimés de cet appareil. Pense à exporter une sauvegarde avant.',
       confirmLabel: 'Tout effacer',
       danger: true
     });
     if (!confirmed) return;
-    state = emptyState();
-    commit();
-    toast('Toutes les données ont été effacées.');
+    await wipeEverything();
+    toast('Toutes les données ont été effacées de cet appareil.');
     openWelcome();
   });
 
@@ -6860,6 +7248,11 @@
 
   function applyHash() {
     const hash = location.hash.replace('#', '');
+    if (hash.startsWith('import=')) {
+      try { history.replaceState(null, '', location.pathname + location.search); } catch { /* file:// */ }
+      receiveTransfer(hash.slice(7));
+      return;
+    }
     if (hash === 'add' || hash === 'add-income') {
       try { history.replaceState(null, '', location.pathname + location.search); } catch { /* file:// */ }
       openAdd({ mode: hash === 'add' ? 'expense' : 'income' });
@@ -6916,8 +7309,25 @@
     'serviceWorker' in navigator &&
     (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
   ) {
+    // Nouvelle version : le nouveau service worker attend ; l'utilisateur choisit quand recharger.
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg.waiting);
+        reg.addEventListener('updatefound', () => {
+          const w = reg.installing;
+          if (!w) return;
+          w.addEventListener('statechange', () => {
+            if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdate(w);
+          });
+        });
+        setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+      }).catch(() => {});
+    });
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading || !waitingWorker) return;
+      reloading = true;
+      location.reload();
     });
   }
 
@@ -6940,13 +7350,15 @@
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
       closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData,
       addWish, updateProjectInfo, openProject, saveCatRule, deleteCatRule, setProSettings, addSplit, openRules, openProofs, importJson,
-      openWelcome, startTour, openHelp, addAccount, deleteAccount, reconcileAccount, addFavorite, deleteFavorite, useFavorite, addSubscription, openAccounts, openSubs, startCsvImport
+      openWelcome, startTour, openHelp, encryptedBackup, transferLink, readTransfer, setPin, checkPin, disableLock, enableBiometric,
+      unlockBiometric, lockApp, isLocked, wipeEverything, showUpdate, openSecurity, openPrivacy, addAccount, deleteAccount, reconcileAccount, addFavorite, deleteFavorite, useFavorite, addSubscription, openAccounts, openSubs, startCsvImport
     }
   };
 
   const boot = tick();
   save();
   applyTheme();
+  if (state.prefs.lock.enabled) lockApp();
   render();
   securePersistence();
   cleanupPhotos();
