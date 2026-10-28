@@ -5,11 +5,11 @@
   "description": "BudgetFold OS : budget par enveloppes, 100 % local (PWA vanilla JS).",
   "scripts": {
     "start": "npx --yes serve@14.2.4 -l 5173 .",
-    "check": "node --check script.js",
-    "test": "node --check script.js && node tests/run.js",
+    "test": "node tests/check.js && node tests/run.js",
     "test:app": "node tests/run.js app",
     "test:ocr": "node tests/run.js ocr",
-    "test:fast": "node --check script.js && node tests/run.js analytics app cycle daily data projects proofs receipts security simulation ui"
+    "test:fast": "node tests/check.js && node tests/run.js analytics app cycle daily data projects proofs receipts security simulation ui",
+    "check": "node tests/check.js"
   },
   "devDependencies": {
     "@tesseract.js-data/fra": "1.0.0",

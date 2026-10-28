@@ -1,6 +1,6 @@
 // Service worker : app hors ligne. Une nouvelle version attend que l'utilisateur choisisse « Mettre à jour ».
 const CACHE = 'budgetfold-os-1.0.0';
-const CORE = ['./', './index.html', './style.css', './script.js', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png'];
+const CORE = ['./', './index.html', './style.css', './js/util.mjs', './js/data.mjs', './js/engine.mjs', './js/io.mjs', './js/ui.mjs', './js/main.mjs', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(CORE)));

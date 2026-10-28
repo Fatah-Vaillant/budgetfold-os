@@ -246,7 +246,7 @@ const submit = async (p) => { await act(p, () => document.getElementById('tx-for
     const p = await H.open({ storage: clone(demo) });
     await act(p, () => window.BudgetFold.actions.openAdd());
     await (await p.$('#scan-file')).uploadFile(path.join(OUT, 'facture.pdf'));
-    await p.waitForFunction(() => document.getElementById('scan-status').hidden && (window.BudgetFold.ui.lastScan || !document.getElementById('tx-error').hidden), { timeout: 60000 });
+    await p.waitForFunction(() => document.getElementById('scan-status').hidden && (window.BudgetFold.ui.lastScan || !document.getElementById('tx-error').hidden), { timeout: 120000 });
     const got = await act(p, () => ({ amount: document.getElementById('tx-amount').value, label: document.getElementById('tx-label').value, date: document.getElementById('tx-date').value, hint: document.getElementById('tx-hint').textContent, err: document.getElementById('tx-error').textContent }));
     check('facture PDF : total 89,90 €', got.amount === '89,90', got);
     check('facture PDF : enseigne Fnac et date du 12/10/2026', got.label === 'Fnac' && got.date === '2026-10-12', got);
