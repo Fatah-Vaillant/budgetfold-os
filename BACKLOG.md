@@ -13,7 +13,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
 - **En mode Plan c'est juste** (le projet ne réserve rien), ce qui confirme la cause.
 - **Corrigé** : `projectPlan` prend un 3e paramètre `reserved` (ce que le projet bloque déjà). La feuille passe 0 pour un nouveau projet, et la mise **enregistrée** (pas celle en cours de saisie) pour un projet modifié. Tests « bug 1.1 » dans `tests/app.test.js`.
 
-### 1.2 Scan de ticket : lecture mauvaise sur un vrai ticket (Lagardère / Relay, Avignon)
+### 1.2 Scan de ticket : lecture mauvaise sur un vrai ticket (Lagardère / Relay, Avignon) — ✅ corrigé (phase 1)
 - Résultat obtenu : enseigne « a. LAGAROERE TR FRANCE SNC », 1 seul article « can (5) 5.50% 2,27 0,13 — 2,40 € », date du jour. Le total (4,00 €) était juste.
 - Attendu : enseigne « Lagardère Travel Retail » (ou « Relay »), 2 articles (Café expresso 1,60 € ; San Pellegrino 50 cl 2,40 €), date 26/01/2023.
 - Causes identifiées dans `parseReceipt` :
@@ -24,7 +24,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
   - Enseigne : ajouter un dictionnaire plus large (Relay, Lagardère, gares…) et corriger les confusions OCR fréquentes (O/D, rn/m).
   - Constituer un **jeu de vrais tickets** (photos) pour les tests automatiques.
 
-### 1.3 Projet « Moto » : impression d'épargne comptée deux fois (diagnostiqué avec le .json du 28/10)
+### 1.3 Projet « Moto » : impression d'épargne comptée deux fois (diagnostiqué avec le .json du 28/10) — ✅ corrigé (phase 1)
 - **Pas de doublon dans les données** : un seul versement de 1 000 € (daté du 16/10), et `saved` = 1 000 €.
 - **Ce qui trompe** : le projet est Actif avec une mise de 1 000 €/mois. En octobre, l'app compte donc la mise du mois (1 000 €, réservée) **et** le versement exceptionnel (1 000 €). La part « Projets » affiche 2 000 €.
 - **Conséquence** : revenus 2 000 € − (loyer 300 + enveloppes 500 + mise 1 000 + versement 1 000) = **−800 €** de reste à vivre. Le versement n'a pas été bloqué, car les versements ne sont pas vérifiés par rapport à la marge.

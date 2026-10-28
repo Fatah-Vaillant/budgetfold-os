@@ -326,6 +326,10 @@
         <span class="field-label" id="tx-env-label">Enveloppe</span>
         <div class="chips" id="tx-chips" role="radiogroup" aria-labelledby="tx-env-label"></div>
       </div>
+      <label class="check-row" id="tx-covers-field" hidden>
+        <input type="checkbox" id="tx-covers">
+        <span><strong>C'est la mise de ce mois</strong><small id="tx-covers-text">Le versement remplace la mise automatique au lieu de s'y ajouter.</small></span>
+      </label>
       <div class="field-row">
         <div class="field">
           <label for="tx-date" id="tx-date-label">Date</label>
@@ -419,6 +423,15 @@
           <label for="env-mode-active"><i data-lucide="play"></i>Actif</label>
           <input type="radio" name="env-mode" id="env-mode-plan" value="plan">
           <label for="env-mode-plan"><i data-lucide="flask-conical"></i>Plan (simulation)</label>
+        </div>
+        <div class="field" id="env-start-field" hidden>
+          <span class="field-label" id="env-start-label">Première mise</span>
+          <div class="segmented" id="env-start-wrap" role="radiogroup" aria-labelledby="env-start-label">
+            <input type="radio" name="env-start" id="env-start-pay" value="pay" checked>
+            <label for="env-start-pay"><i data-lucide="banknote"></i><span id="env-start-pay-text">À la prochaine paie</span></label>
+            <input type="radio" name="env-start" id="env-start-now" value="now">
+            <label for="env-start-now"><i data-lucide="zap"></i>Dès ce mois-ci</label>
+          </div>
         </div>
         <div class="field-row">
           <div class="field">

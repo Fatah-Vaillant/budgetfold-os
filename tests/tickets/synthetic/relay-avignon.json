@@ -1,0 +1,10 @@
+{
+  "merchant": "Relay",
+  "total": 400,
+  "date": "2023-01-26",
+  "dateOld": true,
+  "items": [
+    { "label": "expresso", "amount": 160 },
+    { "label": "pellegrino", "amount": 240 }
+  ]
+}

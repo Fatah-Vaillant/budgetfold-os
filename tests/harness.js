@@ -73,7 +73,8 @@ async function start() {
     } catch (e) { logs.push('CDP ERR ' + e.message); }
   });
 
-  async function open({ width = 1280, height = 900, mobile = false, today = '2026-10-15', storage = null, key = 'budgetfold-os:v3', page: file = '/' } = {}) {
+  // `init` : script exécuté avant l'app (ex. remplacer navigator.storage pour un test).
+  async function open({ width = 1280, height = 900, mobile = false, today = '2026-10-15', storage = null, key = 'budgetfold-os:v3', page: file = '/', init = null } = {}) {
     const page = await browser.newPage();
     await page.setViewport({ width, height, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
     page.on('console', async (m) => { if (m.type() === 'warn') { const a = await Promise.all(m.args().map((x) => x.evaluate((v) => (v instanceof Error ? v.stack : String(v))).catch(() => '?'))); logs.push('WARN ' + a.join(' ')); return; } if (['error', 'warning', 'warn'].includes(m.type()) && !/Failed to load resource/.test(m.text())) logs.push(`[${width}] ${m.type()}: ${m.text()}`); });
@@ -107,6 +108,7 @@ async function start() {
         sessionStorage.setItem('__seeded', '1');
       }
     }, today, storage, key);
+    if (init) await page.evaluateOnNewDocument(init);
     await page.goto(`http://localhost:${port}${file}`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 400));
     return page;

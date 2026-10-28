@@ -2,7 +2,9 @@
   'use strict';
 
   const VERSION = '3.0';
-  const STORAGE_KEY = 'budgetfold-os:v3';
+  const DATA_VERSION = 4;
+  const STORAGE_KEY = 'budgetfold-os:v4';
+  const V3_KEY = 'budgetfold-os:v3';
   const V2_KEY = 'budgetfold-os:v2';
   const LEGACY_KEY = 'budgetfold-os:v1';
   const MAX_CENTS = 1_000_000_000;
@@ -52,6 +54,7 @@
   };
   const mondayOf = (iso) => addDays(iso, -((parseISO(iso).getDay() + 6) % 7));
   const maxISO = (a, b) => (a > b ? a : b);
+  const maxMonth = maxISO;
   const minISO = (a, b) => (a < b ? a : b);
   const isISO = (s) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
@@ -64,6 +67,11 @@
   const isMonthKey = (s) => /^(20\d{2})-(0[1-9]|1[0-2])$/.test(s || '');
   const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const monthName = (key) => capitalize(parseISO(`${key}-01`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }));
+  // « d'octobre 2026 », « de novembre 2026 »
+  const ofMonth = (key) => {
+    const n = monthName(key).toLowerCase();
+    return /^[aeiouyéèâ]/.test(n) ? `d'${n}` : `de ${n}`;
+  };
   const monthShort = (key) => capitalize(parseISO(`${key}-01`).toLocaleDateString('fr-FR', { month: 'short' }).replace('.', ''));
   const shortDate = (iso) => parseISO(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   const dayHeading = (iso) => {
@@ -216,7 +224,7 @@
   ];
 
   const emptyState = () => ({
-    v: 3,
+    v: DATA_VERSION,
     salary: 0,
     salaryDay: 1,
     openingBalance: null,
@@ -225,7 +233,7 @@
     recurring: [],
     transactions: [],
     rules: [],
-    prefs: { onboarded: false, lastEnvId: null }
+    prefs: { onboarded: false, lastEnvId: null, since: clock.today(), lastExport: null }
   });
 
   const initialPostedUntil = (start) => addDays(maxISO(start, firstOf(monthOf(clock.today()))), -1);
@@ -263,6 +271,7 @@
           monthly: toCents(e.monthly),
           mode: e.mode === 'plan' ? 'plan' : 'active',
           deadline: isMonthKey(e.deadline) ? e.deadline : null,
+          startMonth: isMonthKey(e.startMonth) ? e.startMonth : null,
           createdAt
         });
       } else {
@@ -315,6 +324,7 @@
       const detail = cleanDetail(t.detail);
       if (detail) tx.detail = detail;
       if (typeof t.recId === 'string' && t.recId) tx.recId = t.recId;
+      if (type === 'deposit' && isMonthKey(t.covers)) tx.covers = t.covers;
       if (typeof t.ref === 'string' && t.ref) tx.ref = t.ref.slice(0, 120);
       s.transactions.push(tx);
     }
@@ -327,7 +337,17 @@
 
     s.prefs.onboarded = Boolean(raw.prefs && raw.prefs.onboarded);
     s.prefs.lastEnvId = raw.prefs && isSpend(raw.prefs.lastEnvId) ? raw.prefs.lastEnvId : null;
+    if (raw.prefs && isISO(raw.prefs.since)) s.prefs.since = raw.prefs.since;
+    if (raw.prefs && isISO(raw.prefs.lastExport)) s.prefs.lastExport = raw.prefs.lastExport;
     return s;
+  }
+
+  // v3 → v4 : les nouveaux champs (startMonth, covers, since, lastExport…) ont des valeurs par défaut neutres.
+  function migrateV3(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const prefs = { ...(raw.prefs || {}) };
+    if (!isISO(prefs.since)) prefs.since = clock.today();
+    return { ...raw, v: 4, prefs };
   }
 
   function migrateV2(raw) {
@@ -374,20 +394,23 @@
 
   function fromAnyVersion(raw) {
     if (!raw || typeof raw !== 'object') return null;
-    if (raw.v === 3) return sanitize(raw);
-    if (raw.v === 2) return sanitize(migrateV2(raw));
-    if (Array.isArray(raw.envelopes) && raw.salary !== undefined) return sanitize(migrateV1(raw));
+    if (raw.v === DATA_VERSION) return sanitize(raw);
+    if (raw.v === 3) return sanitize(migrateV3(raw));
+    if (raw.v === 2) return sanitize(migrateV3(migrateV2(raw)));
+    if (Array.isArray(raw.envelopes) && raw.salary !== undefined) return sanitize(migrateV3(migrateV1(raw)));
     return null;
   }
 
   function load() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return sanitize(JSON.parse(raw)) || emptyState();
+      for (const key of [STORAGE_KEY, V3_KEY]) {
+        const raw = localStorage.getItem(key);
+        if (raw) return fromAnyVersion(JSON.parse(raw)) || emptyState();
+      }
       const v2 = localStorage.getItem(V2_KEY);
-      if (v2) return sanitize(migrateV2(JSON.parse(v2))) || emptyState();
+      if (v2) return sanitize(migrateV3(migrateV2(JSON.parse(v2)))) || emptyState();
       const legacy = localStorage.getItem(LEGACY_KEY);
-      if (legacy) return sanitize(migrateV1(JSON.parse(legacy))) || emptyState();
+      if (legacy) return sanitize(migrateV3(migrateV1(JSON.parse(legacy)))) || emptyState();
     } catch {
       return emptyState();
     }
@@ -397,12 +420,44 @@
   let state = load();
   let lastAddedId = null;
 
+  // localStorage tient environ 5 Mo : on prévient bien avant.
+  const STORAGE_WARN = 4_000_000;
+  let storageWarned = false;
+
   function save() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      const json = JSON.stringify(state);
+      localStorage.setItem(STORAGE_KEY, json);
+      if (json.length > STORAGE_WARN && !storageWarned) {
+        storageWarned = true;
+        toast('Ton stockage local est presque plein : exporte une sauvegarde depuis le menu.', 'error');
+      }
     } catch {
       toast("Impossible d'enregistrer : le stockage du navigateur est plein ou bloqué.", 'error');
     }
+  }
+
+  // Demande au navigateur de ne pas effacer les données de l'app (Safari peut le faire après 7 jours sans visite).
+  async function securePersistence() {
+    const st = navigator.storage;
+    if (!st) return;
+    try {
+      if (st.persisted && st.persist && !(await st.persisted())) await st.persist();
+    } catch { /* refusé : rien à faire */ }
+    try {
+      if (!st.estimate) return;
+      const { usage = 0, quota = 0 } = await st.estimate();
+      if (quota > 0 && usage / quota > 0.8 && !storageWarned) {
+        storageWarned = true;
+        toast(`Stockage presque plein (${Math.round((usage / quota) * 100)} %) : exporte une sauvegarde.`, 'error');
+      }
+    } catch { /* estimation indisponible */ }
+  }
+
+  const BACKUP_DAYS = 30;
+  function backupAge() {
+    const ref = state.prefs.lastExport || state.prefs.since;
+    return ref ? daysBetween(ref, clock.today()) : 0;
   }
 
   function commit() {
@@ -535,14 +590,25 @@
     };
   }
 
+  // Versements marqués « c'est la mise de ce mois » : ils remplacent la mise automatique au lieu de s'y ajouter.
+  const coveredIn = (e, key) => state.transactions.reduce((s, t) => s + (t.type === 'deposit' && t.envId === e.id && t.covers === key ? t.amount : 0), 0);
+
   function projectContribution(e, key) {
     if (e.mode !== 'active' || e.monthly <= 0) return 0;
+    if (e.startMonth && key < e.startMonth) return 0;
     const cm = currentMonth();
-    if (key < cm) return projectDone(e) ? 0 : e.monthly;
-    const k = monthDiff(cm, key);
+    const due = Math.max(0, e.monthly - coveredIn(e, key));
+    if (key < cm) return projectDone(e) ? 0 : due;
+    const k = monthDiff(maxMonth(cm, e.startMonth || cm), key);
     const savedAtStart = e.saved + e.monthly * k;
-    return Math.max(0, Math.min(e.monthly, e.target - savedAtStart));
+    return Math.max(0, Math.min(due, e.target - savedAtStart));
   }
+
+  // Mois de la prochaine paie : ce mois-ci si le jour de paie n'est pas encore passé.
+  const nextPayMonth = () => {
+    const cm = currentMonth();
+    return dayOf(clock.today()) <= clampDay(state.salaryDay, cm) ? cm : shiftMonth(cm, 1);
+  };
 
   function derive(key = currentMonth()) {
     const today = clock.today();
@@ -778,7 +844,13 @@
 
   function computeInsights(d) {
     const list = [];
-    const push = (tone, icon, title, text, tab) => list.push({ tone, icon, title, text, tab });
+    const push = (tone, icon, title, text, tab, action) => list.push({ tone, icon, title, text, tab, action });
+    const age = backupAge();
+    if ((state.transactions.length || state.envelopes.length) && age >= BACKUP_DAYS) {
+      push('warn', 'download', 'Pense à sauvegarder', state.prefs.lastExport
+        ? `Ton dernier export date de ${age} jours. Tes données ne sont que sur cet appareil : touche pour exporter.`
+        : `Aucune sauvegarde depuis ${age} jours. Tes données ne sont que sur cet appareil : touche pour exporter.`, null, 'export');
+    }
     if (d.income <= 0) return list;
     const today = clock.today();
 
@@ -842,13 +914,15 @@
     let key = state.lastRollover;
     let guard = 0;
     while (key < current && guard++ < 600) {
+      const closing = key;
       key = shiftMonth(key, 1);
       for (const e of state.envelopes) {
-        if (e.kind === 'project' && e.mode === 'active' && e.monthly > 0 && e.saved < e.target) {
-          const add = Math.min(e.monthly, e.target - e.saved);
-          e.saved += add;
-          credits.set(e.id, (credits.get(e.id) || 0) + add);
-        }
+        if (e.kind !== 'project' || e.mode !== 'active' || e.monthly <= 0 || e.saved >= e.target) continue;
+        if (e.startMonth && closing < e.startMonth) continue;
+        const add = Math.min(Math.max(0, e.monthly - coveredIn(e, closing)), e.target - e.saved);
+        if (add <= 0) continue;
+        e.saved += add;
+        credits.set(e.id, (credits.get(e.id) || 0) + add);
       }
     }
     state.lastRollover = current;
@@ -871,10 +945,13 @@
       if (input.deadline && input.deadline < key) return fail("L'échéance doit être ce mois-ci ou plus tard.");
       if (input.mode === 'active') {
         if (input.monthly <= 0 && input.saved < input.target) return fail('Indique une mise par mois, ou une date pour la calculer.');
-        const next = projectContribution({ ...input, mode: 'active' }, key);
-        const prev = existing ? projectContribution(existing, key) : 0;
-        if (next - prev > d.free) {
-          const cap = Math.max(0, d.free + prev);
+        const probe = { ...(existing || {}), ...input, mode: 'active' };
+        const first = maxMonth(key, probe.startMonth || key);
+        const free = first === key ? d.free : derive(first).free;
+        const next = projectContribution(probe, first);
+        const prev = existing ? projectContribution(existing, first) : 0;
+        if (next - prev > free) {
+          const cap = Math.max(0, free + prev);
           return fail(`Ta marge actuelle permet ${money(cap)} par mois au maximum. Passe en mode « Plan » pour simuler ce projet sans bloquer d'argent.`);
         }
       }
@@ -896,7 +973,7 @@
     if (!check.ok) return check;
     const base = { id: uid(), name: check.data, createdAt: clock.now() };
     const env = input.kind === 'project'
-      ? { ...base, kind: 'project', target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.deadline || null }
+      ? { ...base, kind: 'project', target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.deadline || null, startMonth: isMonthKey(input.startMonth) ? input.startMonth : null }
       : { ...base, kind: 'spend', max: input.max, period: input.period, anchor: clock.today(), reset: null };
     state.envelopes.push(env);
     lastAddedId = env.id;
@@ -912,6 +989,7 @@
     env.name = check.data;
     if (env.kind === 'project') {
       Object.assign(env, { target: input.target, saved: input.saved, monthly: input.monthly, mode: input.mode, deadline: input.deadline || null });
+      if (input.startMonth !== undefined) env.startMonth = isMonthKey(input.startMonth) ? input.startMonth : null;
     } else {
       if (env.period !== input.period) env.anchor = clock.today();
       env.max = input.max;
@@ -1035,10 +1113,11 @@
     return ok();
   }
 
-  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId }, { silent = false } = {}) {
+  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false }, { silent = false } = {}) {
     const t = { id: uid(), type, envId: type === 'income' ? null : envId || null, amount, note: cleanNote(note), date, ts: clock.now() };
     const check = validateTx(t, null);
     if (!check.ok) return check;
+    if (type === 'deposit' && covers) t.covers = monthOf(date);
     const dt = cleanDetail(detail);
     if (dt) t.detail = dt;
     if (ref) t.ref = ref;
@@ -1062,6 +1141,8 @@
       if (env) env.saved = Math.max(0, env.saved - tx.amount);
     }
     Object.assign(tx, { type: next.type, envId: next.envId || null, amount: next.amount, date: next.date, note: cleanNote(next.note) });
+    if (tx.type === 'deposit' && next.covers) tx.covers = monthOf(tx.date);
+    else delete tx.covers;
     const dt = cleanDetail(next.detail);
     if (dt) tx.detail = dt;
     else delete tx.detail;
@@ -1092,6 +1173,23 @@
     }
     commit();
   }
+
+  // Reste à vivre d'un mois si l'on appliquait `mutate` : on calcule sur une copie, l'état réel n'est pas touché.
+  function freeAfter(key, mutate) {
+    const real = state;
+    state = JSON.parse(JSON.stringify(real));
+    try {
+      mutate(state);
+      return derive(key).free;
+    } finally {
+      state = real;
+    }
+  }
+
+  const DUPLICATE_MS = 2 * 60 * 1000;
+  // Même type, même montant, même cible, saisi il y a moins de 2 minutes : probablement un double toucher.
+  const recentTwin = ({ type, envId = null, amount }) => state.transactions.find((t) => t.type === type && (t.envId || null) === (type === 'income' ? null : envId || null)
+    && t.amount === amount && t.ts > 0 && clock.now() - t.ts >= 0 && clock.now() - t.ts < DUPLICATE_MS);
 
   function labelKey(label) {
     const stop = new Set(['carte', 'cb', 'paiement', 'prlv', 'sepa', 'vir', 'virement', 'prelevement', 'facture', 'achat', 'retrait', 'dab', 'cheque', 'les', 'des', 'chez', 'par', 'sur', 'ticket']);
@@ -1313,9 +1411,24 @@
     ['netto', 'Netto'], ['cora', 'Cora'], ['naturalia', 'Naturalia'], ['decathlon', 'Decathlon'], ['fnac', 'Fnac'], ['darty', 'Darty'],
     ['ikea', 'IKEA'], ['primark', 'Primark'], ['sephora', 'Sephora'], ['pharmacie', 'Pharmacie'], ['mcdonald', "McDonald's"],
     ['burger king', 'Burger King'], ['kfc', 'KFC'], ['starbucks', 'Starbucks'], ['boulangerie', 'Boulangerie'],
-    ['totalenergies', 'TotalEnergies'], ['esso', 'Esso'], ['shell', 'Shell'], ['action', 'Action'], ['zara', 'Zara'], ['kiabi', 'Kiabi']
+    ['totalenergies', 'TotalEnergies'], ['esso', 'Esso'], ['shell', 'Shell'], ['action', 'Action'], ['zara', 'Zara'], ['kiabi', 'Kiabi'],
+    ['relay', 'Relay'], ['hudson', 'Hudson'], ['paul', 'Paul'], ['brioche doree', 'Brioche Dorée'], ['la mie caline', 'La Mie Câline'],
+    ['marie blachere', 'Marie Blachère'], ['columbus cafe', 'Columbus Café'], ['monop', "Monop'"], ['bricomarche', 'Bricomarché'],
+    ['leroy merlin', 'Leroy Merlin'], ['castorama', 'Castorama'], ['boulanger', 'Boulanger'], ['cultura', 'Cultura'], ['gifi', 'Gifi'],
+    ['nature et decouvertes', 'Nature & Découvertes'], ['flunch', 'Flunch'], ['quick', 'Quick'], ['subway', 'Subway'],
+    ['dominos', "Domino's"], ['five guys', 'Five Guys'], ['o tacos', "O'Tacos"], ['galeries lafayette', 'Galeries Lafayette'],
+    ['uniqlo', 'Uniqlo'], ['celio', 'Celio'], ['intersport', 'Intersport'], ['go sport', 'Go Sport'], ['la poste', 'La Poste'],
+    ['tabac', 'Tabac'], ['maisons du monde', 'Maisons du Monde'], ['picard surgeles', 'Picard'], ['avia', 'Avia'],
+    // Raisons sociales : retenues seulement si aucune enseigne n'est trouvée.
+    ['lagardere travel retail', 'Lagardère Travel Retail', 'legal'], ['lagardere', 'Lagardère Travel Retail', 'legal'],
+    ['sncf', 'SNCF', 'legal'], ['gare', 'Boutique de gare', 'legal']
   ];
-  const AMOUNT_TAIL = /(-?\s?\d{1,4}(?:[ .]\d{3})*[.,]\d{2})\s*(?:€|eur(?:os?)?|e)?\s*(?:[a-d1-4*]{1,2})?\s*$/i;
+  // Lecture OCR : confusions fréquentes ramenées à une même forme (O/D/0, rn/m, l/i/1, S/5).
+  const ocrCanon = (s) => normText(s).replace(/rn/g, 'm').replace(/[d0]/g, 'o').replace(/[1i|!]/g, 'l').replace(/5/g, 's');
+  // Montant en fin de ligne, éventuellement suivi d'un code TVA (lettre ou nombre de 1 à 2 chiffres : « 1,60 10 »).
+  const AMOUNT_TAIL = /(-?\s?\d{1,4}(?:[ .]\d{3})*[.,]\d{2})\s*(?:€|eur(?:os?)?|e)?\s*(?:[a-d*]{1,2}|\d{1,2})?\s*$/i;
+  const VAT_BLOCK = /\b(tx|taux|code)\s*(de\s*)?tva\b|\btva\s+ht\b|\bht\s+tva\b/;
+  const EAN = /\b\d{8,14}\b/g;
   const NOT_TOTAL = /(sous[\s-]*total|s\/total|tva|\bht\b|rendu|monnaie|remise|econom|fidelit|cagnotte|avantage|nb\s*art|nombre|articles?\b|points?\b)/;
   const NOT_ITEM = /(total|tva|\bht\b|\bcb\b|carte|rendu|esp[eè]ces|especes|montant|paiement|payer|ticket|caisse|siret|\btel\b|merci|bienvenue|date|heure|sous|monnaie|\bn[°o]\s?\d|transaction|autoris|contactless|sans contact|visa|mastercard)/;
   const TOTAL_KEYS = [
@@ -1341,7 +1454,8 @@
   }
 
   const tidyLabel = (s) => {
-    let t = s.replace(/^[\s\-–*•.]+/, '').replace(/^\d+\s*[x×*]\s*/i, '').replace(/\s+[x×*]\s*\d+([.,]\d+)?\s*$/i, '')
+    let t = s.replace(EAN, ' ').replace(/(\s+-?\d{1,4}[.,]\d{2})+\s*$/, '')
+      .replace(/^[\s\-–*•.]+/, '').replace(/^\d+\s*[x×*]\s*/i, '').replace(/^\d{1,2}\s+(?=[a-zà-ÿ])/i, '').replace(/\s+[x×*]\s*\d+([.,]\d+)?\s*$/i, '')
       .replace(/\s+\d+([.,]\d+)?\s*(kg|g|l|cl|ml)?\s*[x×*@]\s*\d+[.,]\d{2}.*$/i, '')
       .replace(/[\s.:_\-]+$/, '').replace(/\s{2,}/g, ' ').trim();
     if (t && t === t.toUpperCase()) t = capitalize(t.toLowerCase());
@@ -1353,13 +1467,17 @@
     const norm = lines.map((l) => normText(l));
     const all = norm.join('\n');
 
+    // Enseigne : la plus haute sur le ticket, en tolérant les confusions OCR ; une raison sociale ne passe qu'en dernier.
     let merchant = null;
     let best = Infinity;
-    for (const [key, label] of RECEIPT_STORES) {
-      const re = new RegExp(`(^|[^a-z])${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`, 'm');
-      const m = re.exec(all);
-      if (m && m.index < best) {
-        best = m.index;
+    const canon = ocrCanon(all);
+    for (const [key, label, kind] of RECEIPT_STORES) {
+      const re = new RegExp(`(^|[^a-z])${ocrCanon(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`, 'm');
+      const m = re.exec(canon);
+      if (!m) continue;
+      const rank = m.index + (kind === 'legal' ? 1e6 : 0);
+      if (rank < best) {
+        best = rank;
         merchant = label;
       }
     }
@@ -1373,18 +1491,20 @@
       }
     }
 
+    // Date : même ancienne, elle est gardée (un justificatif peut dater) ; l'interface prévient au-delà d'un mois.
     let date = null;
     const today = clock.today();
     for (const l of lines) {
-      const m = /(\d{1,2})\s?[/.\-]\s?(\d{1,2})\s?[/.\-]\s?(\d{4}|\d{2})/.exec(l);
+      const m = /(\d{1,2})\s?[/.\-]\s?(\d{1,2})\s?[/.\-]\s?(\d{4}|\d{2})(?!\d)/.exec(l);
       if (!m) continue;
       const y = m[3].length === 2 ? `20${m[3]}` : m[3];
       const iso = `${y}-${pad(Number(m[2]))}-${pad(Number(m[1]))}`;
-      if (isISO(iso) && iso <= today && daysBetween(iso, today) <= 400) {
+      if (isISO(iso) && iso <= today) {
         date = iso;
         break;
       }
     }
+    const dateOld = Boolean(date && daysBetween(date, today) > 31);
 
     let total = null;
     let totalIdx = -1;
@@ -1405,14 +1525,25 @@
       }
     });
 
+    // Articles : jusqu'au total ou au récapitulatif TVA. Une ligne sans prix suivie d'une ligne de prix seul
+    // forme un article sur deux lignes (désignation + code EAN, puis prix).
     const items = [];
-    const stop = totalIdx >= 0 ? lines.findIndex((l, i) => TOTAL_KEYS.some(([re]) => re.test(norm[i])) && !NOT_TOTAL.test(norm[i])) : lines.length;
-    for (let i = 0; i < (stop >= 0 ? stop : lines.length); i++) {
-      if (NOT_ITEM.test(norm[i])) continue;
+    const totalAt = totalIdx >= 0 ? lines.findIndex((l, i) => TOTAL_KEYS.some(([re]) => re.test(norm[i])) && !NOT_TOTAL.test(norm[i])) : -1;
+    const vatAt = norm.findIndex((n) => VAT_BLOCK.test(n));
+    const stop = Math.min(totalAt >= 0 ? totalAt : lines.length, vatAt >= 0 ? vatAt : lines.length);
+    const letters = (s) => (s.replace(EAN, '').match(/[a-zà-ÿ]/gi) || []).length;
+    let pending = null;
+    for (let i = 0; i < stop; i++) {
+      if (NOT_ITEM.test(norm[i]) || lines[i].includes('%')) { pending = null; continue; }
       const a = amountOf(lines[i]);
-      if (!a || a.cents === 0) continue;
-      const label = tidyLabel(lines[i].slice(0, a.index));
-      if ((label.match(/[a-zà-ÿ]/gi) || []).length < 2) continue;
+      if (!a) {
+        pending = letters(lines[i]) >= 3 ? { line: lines[i], i } : null;
+        continue;
+      }
+      let label = tidyLabel(lines[i].slice(0, a.index));
+      if (letters(label) < 2 && pending && pending.i === i - 1) label = tidyLabel(pending.line);
+      pending = null;
+      if (a.cents === 0 || letters(label) < 2) continue;
       items.push({ label, amount: a.cents });
       if (items.length >= 60) break;
     }
@@ -1425,7 +1556,7 @@
         total = amounts.length ? Math.max(...amounts) : null;
       }
     }
-    return { merchant, date, total, items, itemsSum: sum, lines: lines.length };
+    return { merchant, date, dateOld, total, items, itemsSum: sum, lines: lines.length };
   }
 
   function receiptDetail(r) {
@@ -1529,11 +1660,11 @@
     'cash-edit', 'forecast', 'rec-summary', 'rec-list', 'rec-empty', 'r-prev', 'r-next', 'r-label', 'r-tiles', 'r-bars',
     'r-days', 'r-notes', 'dlg-welcome', 'w-step1', 'w-step2', 'w-income', 'w-next', 'w-skip', 'w-back', 'w-templates',
     'w-error', 'dlg-tx', 'tx-form', 'tx-title', 'tx-sub', 'tx-mode', 'tx-scan', 'scan-status', 'scan-text', 'tx-amount',
-    'tx-label', 'tx-label-title', 'tx-env-field', 'tx-env-label', 'tx-chips', 'tx-date', 'tx-date-label', 'tx-repeat-field',
+    'tx-label', 'tx-label-title', 'tx-env-field', 'tx-env-label', 'tx-chips', 'tx-covers-field', 'tx-covers', 'tx-covers-text', 'tx-date', 'tx-date-label', 'tx-repeat-field',
     'tx-repeat', 'tx-until-field', 'tx-until', 'tx-detail-box', 'tx-detail', 'tx-series', 'tx-series-text', 'tx-series-edit',
     'tx-hint', 'tx-error', 'tx-delete', 'tx-submit', 'dlg-env', 'env-form', 'env-title', 'env-sub', 'env-kind-wrap',
     'env-name', 'env-spend-fields', 'env-max', 'env-period', 'env-project-fields', 'env-mode-wrap', 'env-target',
-    'env-saved', 'env-deadline', 'env-monthly', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
+    'env-saved', 'env-deadline', 'env-monthly', 'env-start-field', 'env-start-wrap', 'env-start-pay-text', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
@@ -1546,7 +1677,7 @@
       if (v === null || v === undefined || v === false) continue;
       if (k === 'class') el.className = v;
       else if (k === 'text') el.textContent = v;
-      else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k === 'dataset') { for (const [dk, dv] of Object.entries(v)) if (dv !== null && dv !== undefined) el.dataset[dk] = dv; }
       else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
       else el.setAttribute(k, v === true ? '' : String(v));
     }
@@ -1591,7 +1722,7 @@
 
   const signed = (cents) => `${cents < 0 ? '−' : '+'}${money(Math.abs(cents))}`;
 
-  const ui = { tab: 'home', journalMonth: null, journalFilter: 'all', reportMonth: null, agendaMonth: null, agendaDay: null };
+  const ui = { tab: 'home', journalMonth: null, journalFilter: 'all', reportMonth: null, agendaMonth: null, agendaDay: null, lastScan: null };
   const TABS = ['home', 'journal', 'agenda', 'report'];
   const TAB_HASH = { home: '', journal: '#journal', agenda: '#agenda', report: '#bilan' };
 
@@ -1878,8 +2009,8 @@
         h('span', { class: 'insight-icon', 'aria-hidden': 'true' }, icon(it.icon)),
         h('span', { class: 'insight-text' }, h('strong', { text: it.title }), h('span', { text: it.text }))
       ];
-      return it.tab
-        ? h('button', { type: 'button', class: 'insight', dataset: { tone: it.tone, tab: it.tab } }, body)
+      return it.tab || it.action
+        ? h('button', { type: 'button', class: 'insight', dataset: { tone: it.tone, tab: it.tab || null, action: it.action || null } }, body)
         : h('div', { class: 'insight', dataset: { tone: it.tone } }, body);
     }));
     els.insights.hidden = list.length === 0;
@@ -2319,7 +2450,7 @@
     try { fn(event); } finally { setTimeout(() => { busy = false; }, 350); }
   };
 
-  const txUi = { mode: 'expense', txId: null, ruleId: null, envId: null, projectId: null, envTouched: false, suggested: false, scanning: false };
+  const txUi = { mode: 'expense', txId: null, ruleId: null, envId: null, projectId: null, envTouched: false, suggested: false, scanning: false, coversTouched: false };
 
   const sheetDate = () => (isISO(els.txDate.value) ? els.txDate.value : clock.today());
   const sheetRepeat = () => (txUi.mode === 'deposit' || txUi.txId ? 'once' : els.txRepeat.value);
@@ -2357,6 +2488,41 @@
       chip('', repeat === 'once' ? 'Aucune' : 'Aucune (charge fixe)', repeat === 'once' ? 'hors enveloppe' : 'réservée à part'));
   }
 
+  // Versement en cours de saisie : mise du mois encore due, case « mise de ce mois », reste à vivre après versement.
+  function depositDraft() {
+    const env = findEnv(txUi.projectId);
+    if (!env || env.kind !== 'project') return null;
+    const date = sheetDate();
+    const key = monthOf(date);
+    const amount = parseAmount(els.txAmount.value) || 0;
+    const prev = txUi.txId ? state.transactions.find((t) => t.id === txUi.txId) : null;
+    const own = prev && prev.type === 'deposit' && prev.envId === env.id && prev.covers === key ? prev.amount : 0;
+    const due = env.mode === 'active' && env.monthly > 0 ? Math.min(env.monthly, projectContribution(env, key) + own) : 0;
+    const offered = due > 0 || Boolean(prev && prev.covers);
+    const covers = offered && els.txCovers.checked;
+    const after = freeAfter(key, (st) => {
+      if (prev) {
+        st.transactions = st.transactions.filter((t) => t.id !== prev.id);
+        const pe = prev.type === 'deposit' && st.envelopes.find((x) => x.id === prev.envId);
+        if (pe) pe.saved = Math.max(0, pe.saved - prev.amount);
+      }
+      const e = st.envelopes.find((x) => x.id === env.id);
+      st.transactions.push({ id: '__draft__', type: 'deposit', envId: env.id, amount, date, ts: 0, ...(covers ? { covers: key } : {}) });
+      e.saved = Math.min(e.target, e.saved + amount);
+    });
+    return { env, key, amount, prev, due, offered, covers, after };
+  }
+
+  function syncCovers() {
+    const draft = txUi.mode === 'deposit' ? depositDraft() : null;
+    els.txCoversField.hidden = !(draft && draft.offered);
+    if (!draft || !draft.offered) return;
+    if (!txUi.coversTouched) els.txCovers.checked = draft.prev ? Boolean(draft.prev.covers) : draft.due > 0;
+    els.txCoversText.textContent = draft.due > 0
+      ? `Le versement remplace la mise automatique de ${money(draft.due)} prévue en ${monthName(draft.key).toLowerCase()}, au lieu de s'y ajouter.`
+      : `La mise ${ofMonth(draft.key)} est déjà couverte.`;
+  }
+
   function updateTxHint() {
     const amount = parseAmount(els.txAmount.value);
     const date = sheetDate();
@@ -2366,14 +2532,17 @@
     const until = isISO(els.txUntil.value) ? ` jusqu'au ${shortDate(els.txUntil.value)}` : '';
 
     if (txUi.mode === 'deposit') {
-      const env = findEnv(txUi.projectId);
-      if (!env) return setHint(els.txHint, 'Choisis le projet à alimenter.');
-      const prev = txUi.txId ? state.transactions.find((t) => t.id === txUi.txId) : null;
+      const draft = depositDraft();
+      if (!draft) return setHint(els.txHint, 'Choisis le projet à alimenter.');
+      const { env, prev } = draft;
       const room = env.target - env.saved + (prev && prev.type === 'deposit' && prev.envId === env.id ? prev.amount : 0);
-      const after = room - (amount || 0);
-      return after < 0
-        ? setHint(els.txHint, `Dépasse l'objectif de ${money(-after)}.`, 'bad')
-        : setHint(els.txHint, `Versement exceptionnel, pris sur ton reste à vivre. Encore ${money(after)} pour atteindre l'objectif.`, amount ? 'ok' : undefined);
+      const left = room - (amount || 0);
+      if (left < 0) return setHint(els.txHint, `Dépasse l'objectif de ${money(-left)}.`, 'bad');
+      if (amount && draft.after < 0) {
+        return setHint(els.txHint, `Attention : ton reste à vivre ${ofMonth(draft.key)} passerait à ${money(draft.after)}.`, 'bad');
+      }
+      const what = draft.covers ? `Compté comme la mise ${ofMonth(draft.key)}.` : 'Versement exceptionnel, pris sur ton reste à vivre.';
+      return setHint(els.txHint, `${what} Encore ${money(left)} pour atteindre l'objectif.${amount ? ` Reste à vivre après : ${money(draft.after)}.` : ''}`, amount ? 'ok' : undefined);
     }
 
     if (repeat !== 'once') {
@@ -2439,6 +2608,7 @@
         : repeat !== 'once' ? 'Dépense récurrente' : future ? 'Dépense prévue' : 'Nouvelle dépense';
     }
     renderTxChips();
+    syncCovers();
     updateTxHint();
     flushIcons();
   }
@@ -2449,7 +2619,7 @@
   }
 
   function openAdd({ mode = 'expense', date = null, envId, projectId = null } = {}) {
-    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId });
+    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId, coversTouched: false });
     resetScanUi();
     els.txSub.textContent = 'Dépense, revenu, prévision ou paiement qui se répète.';
     setRadio(els.txForm, 'tx-mode', mode);
@@ -2474,7 +2644,7 @@
   }
 
   function openTx(tx) {
-    Object.assign(txUi, { mode: tx.type, txId: tx.id, ruleId: null, envTouched: true, suggested: false, envId: tx.type === 'expense' ? tx.envId : null, projectId: tx.type === 'deposit' ? tx.envId : null });
+    Object.assign(txUi, { mode: tx.type, txId: tx.id, ruleId: null, envTouched: true, suggested: false, envId: tx.type === 'expense' ? tx.envId : null, projectId: tx.type === 'deposit' ? tx.envId : null, coversTouched: false });
     resetScanUi();
     els.txTitle.textContent = tx.date > clock.today() ? 'Modifier la prévision' : "Modifier l'opération";
     els.txSub.textContent = tx.type === 'income' ? 'Revenu' : tx.type === 'deposit' ? 'Versement sur un projet' : 'Dépense';
@@ -2539,12 +2709,20 @@
   els.txChips.addEventListener('click', (e) => {
     const chip = e.target.closest('[data-env], [data-project]');
     if (!chip) return;
-    if (chip.dataset.project !== undefined) txUi.projectId = chip.dataset.project;
-    else {
+    if (chip.dataset.project !== undefined) {
+      txUi.projectId = chip.dataset.project;
+      txUi.coversTouched = false;
+    } else {
       txUi.envId = chip.dataset.env || null;
       txUi.envTouched = true;
     }
     renderTxChips();
+    syncCovers();
+    updateTxHint();
+  });
+
+  els.txCovers.addEventListener('change', () => {
+    txUi.coversTouched = true;
     updateTxHint();
   });
 
@@ -2573,6 +2751,7 @@
 
   [els.txAmount, els.txUntil].forEach((el) => el.addEventListener('input', () => {
     hideError(els.txError);
+    if (txUi.mode === 'deposit') syncCovers();
     updateTxHint();
   }));
   els.txDate.addEventListener('input', () => {
@@ -2588,7 +2767,7 @@
     commit();
   }
 
-  els.txForm.addEventListener('submit', guard(() => {
+  els.txForm.addEventListener('submit', guard(async () => {
     const mode = txUi.mode;
     const amount = parseAmount(els.txAmount.value);
     const label = els.txLabel.value;
@@ -2609,7 +2788,8 @@
 
     if (txUi.txId) {
       const res = updateTransaction(txUi.txId, {
-        type: mode, envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId, amount, note: label, date, detail
+        type: mode, envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId, amount, note: label, date, detail,
+        covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked
       });
       if (!res.ok) return showError(els.txError, res.error);
       if (mode === 'expense' && txUi.envId && label) learnRule(label, txUi.envId);
@@ -2638,8 +2818,32 @@
     const payload = {
       type: mode,
       envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId,
-      amount, note: label, date, detail
+      amount, note: label, date, detail,
+      covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked
     };
+    const pre = validateTx(payload, null);
+    if (!pre.ok) return showError(els.txError, pre.error);
+    if (recentTwin(payload)) {
+      const target = mode === 'deposit' ? ` sur « ${findEnv(payload.envId).name} »` : spendEnv(payload.envId) ? ` dans « ${spendEnv(payload.envId).name} »` : '';
+      const again = await confirmAction({
+        title: 'Doublon probable',
+        text: `Tu viens déjà de saisir ${money(amount)}${target} il y a moins de 2 minutes. L'ajouter une deuxième fois ?`,
+        confirmLabel: 'Ajouter quand même'
+      });
+      if (!again) return;
+    }
+    if (mode === 'deposit') {
+      const draft = depositDraft();
+      if (draft && draft.after < 0) {
+        const go = await confirmAction({
+          title: 'Reste à vivre négatif',
+          text: `Après ce versement, ton reste à vivre ${ofMonth(draft.key)} passerait à ${money(draft.after)}. Verser quand même ?`,
+          confirmLabel: 'Verser quand même',
+          danger: true
+        });
+        if (!go) return;
+      }
+    }
     const res = addTransaction(payload);
     if (!res.ok) return showError(els.txError, res.error);
     if (mode === 'expense' && txUi.envId && txUi.envTouched && label) learnRule(label, txUi.envId);
@@ -2728,6 +2932,7 @@
         els.txDetail.value = detail;
         els.txDetailBox.open = true;
       }
+      ui.lastScan = { merchant: r.merchant, date: r.date, dateOld: r.dateOld, total: r.total, items: r.items };
       if (!txUi.envTouched) {
         const guess = guessEnvelope(`${r.merchant || ''} ${r.text.slice(0, 400)}`);
         if (guess) {
@@ -2737,7 +2942,8 @@
       }
       syncTxForm();
       const env = spendEnv(txUi.envId);
-      setHint(els.txHint, `Ticket lu${r.merchant ? ` (${r.merchant})` : ''} : ${r.total ? money(Math.abs(r.total)) : 'montant à vérifier'}${r.items.length ? `, ${r.items.length} ${plural(r.items.length, 'article', 'articles')}` : ''}. ${env ? `Enveloppe proposée : « ${env.name} ». ` : ''}Vérifie avant d'ajouter.`, 'ok');
+      const old = r.dateOld ? ` Ticket daté du ${parseISO(r.date).toLocaleDateString('fr-FR')} : vérifie la date.` : '';
+      setHint(els.txHint, `Ticket lu${r.merchant ? ` (${r.merchant})` : ''} : ${r.total ? money(Math.abs(r.total)) : 'montant à vérifier'}${r.items.length ? `, ${r.items.length} ${plural(r.items.length, 'article', 'articles')}` : ''}. ${env ? `Enveloppe proposée : « ${env.name} ». ` : ''}Vérifie avant d'ajouter.${old}`, r.dateOld ? 'bad' : 'ok');
     } catch (err) {
       console.warn('BudgetFold scan', err);
       resetScanUi();
@@ -2761,7 +2967,16 @@
     if (els.envMonthly.value.trim() === '' && deadline && target && saved !== null) {
       monthly = projectPlan({ target, saved, deadline, monthly: 0, mode: 'plan' }).needed || 0;
     }
-    return { kind: 'project', name: els.envName.value, target, saved, monthly, deadline, mode };
+    const out = { kind: 'project', name: els.envName.value, target, saved, monthly, deadline, mode };
+    if (!els.envStartField.hidden) out.startMonth = checkedValue(els.envForm, 'env-start') === 'now' ? currentMonth() : nextPayMonth();
+    return out;
+  }
+
+  // Le choix « première mise » n'a de sens que pour un nouveau projet Actif quand la paie du mois est déjà passée.
+  function syncEnvStart() {
+    const show = envUi.kind === 'project' && !envUi.id && checkedValue(els.envForm, 'env-mode') !== 'plan' && nextPayMonth() !== currentMonth();
+    els.envStartField.hidden = !show;
+    if (show) els.envStartPayText.textContent = `À la prochaine paie (${monthName(nextPayMonth()).toLowerCase()})`;
   }
 
   function syncEnvFields() {
@@ -2773,6 +2988,7 @@
   }
 
   function updateEnvHint() {
+    syncEnvStart();
     const d = derive();
     const existing = envUi.id ? findEnv(envUi.id) : null;
     const input = envInput();
@@ -2811,7 +3027,9 @@
     }
     return setHint(els.envHint, input.mode === 'plan'
       ? 'Mode Plan : rien n\'est réservé. Active-le quand ta marge le permet.'
-      : 'Mode Actif : la mise est réservée chaque mois et versée en fin de mois.');
+      : input.startMonth && input.startMonth > currentMonth()
+        ? `Mode Actif : rien n'est réservé ce mois-ci. Première mise en ${monthName(input.startMonth).toLowerCase()}, puis chaque mois.`
+        : 'Mode Actif : la mise est réservée chaque mois et versée en fin de mois.');
   }
 
   function openEnv({ kind = 'spend', env = null } = {}) {
@@ -2828,6 +3046,7 @@
     els.envMonthly.value = env && env.kind === 'project' && env.monthly > 0 ? toInputValue(env.monthly) : '';
     els.envDeadline.value = env && env.kind === 'project' && env.deadline ? env.deadline : '';
     setRadio(els.envForm, 'env-mode', env && env.kind === 'project' ? env.mode : 'active');
+    setRadio(els.envForm, 'env-start', 'pay');
     els.envSubmit.textContent = env ? 'Enregistrer' : 'Créer';
     els.envExtra.hidden = !env;
     els.envReset.hidden = !env || env.kind !== 'spend';
@@ -2845,7 +3064,7 @@
     updateEnvHint();
   });
 
-  [els.envName, els.envMax, els.envTarget, els.envSaved, els.envMonthly, els.envDeadline, els.envPeriod, els.envModeWrap].forEach((el) => {
+  [els.envName, els.envMax, els.envTarget, els.envSaved, els.envMonthly, els.envDeadline, els.envPeriod, els.envModeWrap, els.envStartWrap].forEach((el) => {
     const on = () => {
       hideError(els.envError);
       updateEnvHint();
@@ -2863,7 +3082,10 @@
     toast(envUi.id
       ? 'Modifications enregistrées.'
       : env.kind === 'project'
-        ? env.mode === 'plan' ? `Plan « ${env.name} » créé : rien n'est bloqué.` : `Projet « ${env.name} » créé : ${money(projectContribution(env, currentMonth()))} réservés ce mois-ci.`
+        ? env.mode === 'plan' ? `Plan « ${env.name} » créé : rien n'est bloqué.`
+          : env.startMonth && env.startMonth > currentMonth()
+            ? `Projet « ${env.name} » créé : première mise de ${money(env.monthly)} en ${monthName(env.startMonth).toLowerCase()}.`
+            : `Projet « ${env.name} » créé : ${money(projectContribution(env, currentMonth()))} réservés ce mois-ci.`
         : `« ${env.name} » créée : ${money(env.max)} ${PERIODS[env.period].per}.`);
   }));
 
@@ -3121,6 +3343,8 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    state.prefs.lastExport = clock.today();
+    commit();
     toast('Sauvegarde exportée.');
   }
 
@@ -3175,6 +3399,8 @@
   });
 
   els.insights.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-action]');
+    if (act && act.dataset.action === 'export') return exportData();
     const btn = e.target.closest('[data-tab]');
     if (btn) setTab(btn.dataset.tab);
   });
@@ -3396,6 +3622,7 @@
   const boot = tick();
   save();
   render();
+  securePersistence();
   announceCredits(boot.credits);
   announcePosted(boot.posted);
   applyHash();

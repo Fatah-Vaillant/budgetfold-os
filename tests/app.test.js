@@ -317,7 +317,7 @@ const D = (p, key) => p.evaluate((k) => { const d = window.BudgetFold.derive(k);
     check('v2 migrated: project active', s.envelopes.find((e) => e.id === 'p1').mode === 'active');
     const d = await D(q);
     check('v2 migrated: same reste à vivre as v2 logic', d.free === 185000 + 15000 - 60000 - 30000 - 10000, d.free);
-    check('v3 key written', await q.evaluate(() => !!localStorage.getItem('budgetfold-os:v3')));
+    check('v4 key written', await q.evaluate(() => !!localStorage.getItem('budgetfold-os:v4')));
     await q.close();
   }
 

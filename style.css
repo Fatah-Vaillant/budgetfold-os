@@ -3331,3 +3331,49 @@ input[type="month"] {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Case à cocher sur une ligne (ex. « C'est la mise de ce mois ») */
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--fill);
+  cursor: pointer;
+}
+
+.check-row[hidden] {
+  display: none;
+}
+
+.check-row input {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  accent-color: var(--emerald);
+}
+
+.check-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.check-row strong {
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.check-row small {
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.check-row:has(input:focus-visible) {
+  outline: 2px solid var(--navy-1);
+  outline-offset: 2px;
+}
