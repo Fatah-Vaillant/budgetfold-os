@@ -1349,7 +1349,7 @@
     }
     const spentAll = state.transactions.filter((t) => t.type === 'expense' && inCycle(t.date, key)).reduce((s, t) => s + t.amount, 0);
     const snapshot = {
-      key, start: cycleStart(key), end: cycleEnd(key), income: d.income, carried: d.carried, charges: d.charges,
+      key, start: cycleStart(key), end: cycleEnd(key), income: d.income, carried: d.carried, charges: d.charges, health: healthScore(key).score,
       envAlloc: d.envAlloc, projects: d.projectsMonthly + d.deposits, orphan: d.orphan, free: d.free, spent: spentAll,
       envs: d.spend.map((r) => ({ id: r.env.id, name: r.env.name, period: r.env.period, budget: r.budget, spent: r.used, left: r.left, alloc: r.alloc })),
       saved: state.envelopes.filter((e) => e.kind === 'project').map((e) => ({ id: e.id, name: e.name, saved: e.saved }))
@@ -1414,6 +1414,141 @@
     for (const e of state.envelopes) if (e.kind === 'spend') e.reset = { ...stamp };
     commit();
     return ok(before);
+  }
+
+  // ——— Analyses (phase 6) ———
+  // Besoins / envies pour le repère 50/30/20 (à titre indicatif) : d'après le nom de l'enveloppe.
+  const NEEDS = /course|aliment|supermarch|transport|essence|carbu|sante|pharma|medecin|loyer|energie|electric|assurance|enfant|ecole|cantine|creche|hygien|mutuelle|telephone|internet/;
+  const isNeed = (env) => NEEDS.test(normName(env.name));
+  const firstKey = () => maxMonth(budgetKey(state.prefs.since || clock.today()), shiftMonth(currentMonth(), -23));
+  // Mois budgétaires analysables : depuis le début d'usage, jusqu'au mois en cours (au plus `count`).
+  function analysisKeys(count = 6) {
+    const cm = currentMonth();
+    const keys = [];
+    for (let k = maxMonth(shiftMonth(cm, -(count - 1)), firstKey()); k <= cm; k = shiftMonth(k, 1)) keys.push(k);
+    return keys;
+  }
+
+  // Répartition du mois : besoins, envies, épargne (en % des revenus).
+  function splitNeeds(d) {
+    let needs = d.charges;
+    let wants = d.orphan;
+    for (const r of d.spend) {
+      if (isNeed(r.env)) needs += r.alloc;
+      else wants += r.alloc;
+    }
+    const savings = d.projectsMonthly + d.deposits + Math.max(0, d.free);
+    const pct = (v) => (d.income > 0 ? Math.round((v / d.income) * 100) : 0);
+    return { needs, wants, savings, pNeeds: pct(needs), pWants: pct(wants), pSavings: pct(savings), rate: pct(d.projectsMonthly + d.deposits) };
+  }
+
+  // Jours sans dépense (hors prélèvements automatiques) : série en cours et record sur 60 jours.
+  function noSpendStreak() {
+    const today = clock.today();
+    const days = new Set(state.transactions.filter((t) => t.type === 'expense' && !t.recId && t.date <= today).map((t) => t.date));
+    const since = maxISO(addDays(today, -59), state.prefs.since || today);
+    let best = 0;
+    let run = 0;
+    for (let d = since; d <= today; d = addDays(d, 1)) {
+      run = days.has(d) ? 0 : run + 1;
+      best = Math.max(best, run);
+    }
+    let current = 0;
+    for (let d = days.has(today) ? addDays(today, -1) : today; d >= since && !days.has(d); d = addDays(d, -1)) current++;
+    return { current: days.has(today) ? 0 : current, best };
+  }
+
+  // Abonnements : coût annuel des prélèvements récurrents de type abonnement.
+  const SUBSCRIPTION_WORDS = /netflix|spotify|disney|deezer|prime|canal|abonnement|youtube|icloud|apple|google|salle|sport|fitness|basic fit|gym|presse|journal|magazine|forfait|box|cloud|xbox|playstation|nintendo|dropbox|adobe|microsoft/;
+  function subscriptionsCost() {
+    const today = clock.today();
+    const list = state.recurring
+      .filter((r) => r.type === 'expense' && r.freq !== 'day' && (!r.end || r.end >= today) && SUBSCRIPTION_WORDS.test(normText(r.label)))
+      .map((r) => ({ rule: r, yearly: monthlyEq(r.amount, r.freq) * 12, old: daysBetween(r.start, today) >= 180 }))
+      .sort((a, b) => b.yearly - a.yearly);
+    return { list, total: list.reduce((s, x) => s + x.yearly, 0) };
+  }
+
+  // Suggestions à partir des mois clôturés : enveloppe sous-utilisée ou dépassée 3 mois de suite → nouveau budget.
+  const roundUp5 = (c) => Math.max(500, Math.ceil(c / 500) * 500);
+  function envelopeSuggestions() {
+    const last = state.closings.slice(-3);
+    if (last.length < 3) return [];
+    const out = [];
+    for (const env of state.envelopes.filter((e) => e.kind === 'spend' && e.period === 'month')) {
+      const rows = last.map((c) => (c.snapshot.envs || []).find((x) => x.id === env.id)).filter(Boolean);
+      if (rows.length < 3) continue;
+      const spent = rows.map((r) => r.spent);
+      if (rows.every((r) => r.spent > r.budget)) {
+        const to = roundUp5(Math.round(spent.reduce((s, v) => s + v, 0) / 3));
+        if (to !== env.max) out.push({ env, kind: 'over', to, text: `« ${env.name} » est dépassée 3 mois de suite (${spent.map(moneyRound).join(', ')}). Un budget de ${moneyRound(to)} serait plus réaliste.` });
+      } else if (rows.every((r) => r.spent < r.budget * 0.7)) {
+        const to = roundUp5(Math.max(...spent));
+        if (to < env.max) out.push({ env, kind: 'under', to, text: `« ${env.name} » reste sous-utilisée 3 mois de suite (au plus ${moneyRound(Math.max(...spent))}). Passer à ${moneyRound(to)} libérerait ${moneyRound(env.max - to)} par mois.` });
+      }
+    }
+    return out;
+  }
+
+  // Score de santé du budget sur 100, expliqué facteur par facteur.
+  function healthScore(key = currentMonth()) {
+    const d = derive(key);
+    const isNow = key === currentMonth();
+    const factors = [];
+    const add = (id, label, points, max, tip) => factors.push({ id, label, points: Math.max(0, Math.min(max, Math.round(points))), max, tip });
+    const ratio = d.income > 0 ? d.free / d.income : -1;
+    add('free', 'Reste à vivre', ratio < 0 ? 0 : ratio >= 0.1 ? 25 : 25 * (ratio / 0.1), 25,
+      ratio < 0 ? 'Ton mois dépasse tes revenus : réduis une enveloppe ou une mise.' : ratio < 0.1 ? 'Garde au moins 10 % de marge pour les imprévus.' : 'Bonne marge pour les imprévus.');
+    const tracked = d.spend.filter((r) => r.budget > 0);
+    const kept = tracked.filter((r) => r.used <= r.budget).length;
+    add('envelopes', 'Enveloppes respectées', tracked.length ? 20 * (kept / tracked.length) : 20, 20,
+      kept === tracked.length ? 'Tous tes plafonds sont tenus.' : `${tracked.length - kept} ${plural(tracked.length - kept, 'enveloppe dépassée', 'enveloppes dépassées')} : couvre-les ou ajuste leur budget.`);
+    const rate = d.income > 0 ? (d.projectsMonthly + d.deposits) / d.income : 0;
+    add('savings', 'Épargne du mois', 20 * Math.min(1, rate / 0.2), 20,
+      rate >= 0.2 ? 'Tu mets de côté au moins 20 % de tes revenus.' : `Tu épargnes ${Math.round(rate * 100)} % de tes revenus ; vise un peu plus si ta marge le permet.`);
+    const monthlyNeeds = Math.max(1, d.charges + d.envAlloc);
+    const cushion = (safetyProject() ? safetyProject().saved : 0) + state.accounts.filter((a) => a.kind === 'savings').reduce((s, a) => s + Math.max(0, accountBalance(a) || 0), 0);
+    const months = cushion / monthlyNeeds;
+    add('cushion', 'Matelas de sécurité', 15 * Math.min(1, months / 3), 15,
+      months >= 3 ? 'Ton matelas couvre 3 mois de dépenses.' : `Ton matelas couvre ${months.toFixed(1).replace('.', ',')} mois de dépenses ; l'objectif courant est 3 mois.`);
+    const negatives = isNow ? forecast(6).slice(1).filter((f) => f.d.free < 0).length : d.free < 0 ? 1 : 0;
+    add('forecast', 'Mois à venir', 10 - 4 * negatives, 10, negatives ? `${negatives} ${plural(negatives, 'mois prévu', 'mois prévus')} dans le rouge : anticipe dès maintenant.` : 'Aucun mois à venir dans le rouge.');
+    const spentAll = d.spend.reduce((s, r) => s + r.inMonth, 0) + d.orphan;
+    const orphanShare = spentAll > 0 ? d.orphan / spentAll : 0;
+    const backupOk = !isNow || backupAge() < BACKUP_DAYS;
+    add('hygiene', 'Suivi et sauvegarde', (orphanShare <= 0.1 ? 5 : 0) + (backupOk ? 5 : 0), 10,
+      orphanShare > 0.1 ? 'Range tes dépenses hors enveloppe pour mieux voir où part ton argent.' : backupOk ? 'Dépenses bien rangées, sauvegarde récente.' : 'Pense à exporter une sauvegarde.');
+    const score = factors.reduce((s, f) => s + f.points, 0);
+    const label = score >= 80 ? 'Excellent' : score >= 60 ? 'Solide' : score >= 40 ? 'À surveiller' : 'Fragile';
+    return { key, score, label, factors };
+  }
+
+  // Rapports mensuels (6 derniers mois analysables).
+  function monthlyReport(count = 6) {
+    let cumul = 0;
+    return analysisKeys(count).map((key) => {
+      const d = derive(key);
+      const s = cycleStart(key);
+      const e = minISO(cycleEnd(key), clock.today());
+      const spent = state.transactions.reduce((a, t) => a + (t.type === 'expense' && t.date >= s && t.date <= e ? t.amount : 0), 0);
+      const saved = d.projectsMonthly + d.deposits;
+      cumul += saved;
+      return { key, income: d.income, spent, saved, cumul, byEnv: d.spend.map((r) => ({ id: r.env.id, name: r.env.name, spent: r.inMonth })), health: healthScore(key).score };
+    });
+  }
+
+  // Heures de saisie des dépenses (le jour même) : matin, midi, après-midi, soir, nuit.
+  function spendingHours(key = currentMonth()) {
+    const slots = [['Nuit', 0, 6], ['Matin', 6, 12], ['Midi', 12, 14], ['Après-midi', 14, 18], ['Soir', 18, 24]].map(([label, from, to]) => ({ label, from, to, total: 0, n: 0 }));
+    for (const t of state.transactions) {
+      if (t.type !== 'expense' || t.recId || !t.ts || !inCycle(t.date, key)) continue;
+      const at = new Date(t.ts);
+      if (localISO(at) !== t.date) continue;
+      const slot = slots.find((s) => at.getHours() >= s.from && at.getHours() < s.to);
+      slot.total += t.amount;
+      slot.n += 1;
+    }
+    return slots;
   }
 
   function runRollover() {
@@ -2870,7 +3005,8 @@
     'j-scope', 'j-results', 'rec-detect', 'rec-ics', 'imp-preset', 'imp-subs', 'dlg-accounts', 'acc-list', 'acc-error',
     'acc-transfer-box', 'acc-transfer-form', 'acc-transfer-amount', 'acc-transfer-from', 'acc-transfer-to', 'acc-transfer-date',
     'acc-new-box', 'acc-new-form', 'acc-new-name', 'acc-new-kind', 'acc-new-balance', 'dlg-subs', 'subs-list', 'dlg-favs',
-    'favs-manage-list', 'dlg-shortcut', 'shortcut-url', 'shortcut-copy', 'shortcut-ics', 'menu-accounts', 'menu-shortcut', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
+    'favs-manage-list', 'dlg-shortcut', 'shortcut-url', 'shortcut-copy', 'shortcut-ics', 'menu-accounts', 'menu-shortcut',
+    'r-health', 'r-suggest', 'r-reports', 'forecast-legend', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
@@ -3565,21 +3701,37 @@
     flushIcons();
   }
 
+  // Prévisions découpées par type : prélèvements, enveloppes, projets, dépenses prévues, marge (ou manque).
+  const FC_PARTS = [['charges', 'Prélèvements'], ['envelopes', 'Enveloppes'], ['projects', 'Projets'], ['planned', 'Dépenses prévues']];
+  function forecastParts(d) {
+    return { charges: d.charges, envelopes: d.envAlloc, projects: d.projectsMonthly + d.deposits + (d.provision || 0), planned: d.orphan };
+  }
+
   function renderForecast() {
     const rows = forecast(6);
     const peak = Math.max(1, ...rows.map((f) => Math.max(f.d.income, f.d.allocated)));
+    const pct = (v) => `${Math.min(100, (Math.max(0, v) / peak) * 100)}%`;
+    fill(els.forecastLegend, FC_PARTS.map(([k, label]) => h('li', {}, h('i', { class: `dot fc-dot-${k}` }), label)), h('li', {}, h('i', { class: 'dot fc-dot-free' }), 'Marge'), h('li', {}, h('i', { class: 'dot fc-dot-over' }), 'Manque'));
     fill(els.forecast, rows.map((f) => {
       const { d } = f;
       const neg = d.free < 0;
+      const parts = forecastParts(d);
+      const open = ui.forecastOpen === f.key;
       const notes = f.planned.slice(0, 3).map((p) => `${p.label} ${signed(p.amount)}`);
-      return h('button', { type: 'button', class: 'fc-row', dataset: { key: f.key, negative: String(neg), current: String(f.key === currentMonth()) } },
-        h('span', { class: 'fc-month' }, h('strong', { text: monthShort(f.key) }), h('small', { text: f.key.slice(0, 4) })),
-        h('span', { class: 'fc-body' },
-          h('span', { class: 'fc-bar' },
-            h('i', { class: 'fc-used', style: `width:${Math.min(100, (Math.min(d.allocated, d.income) / peak) * 100)}%` }),
-            h('i', { class: neg ? 'fc-over' : 'fc-free', style: `width:${Math.min(100, (Math.abs(d.free) / peak) * 100)}%` })),
-          h('small', { text: notes.length ? notes.join(' · ') + (f.planned.length > 3 ? '…' : '') : `${money(d.allocated)} prévus sur ${money(d.income)}` })),
-        h('span', { class: 'fc-free-amount' }, h('strong', { text: neg ? `−${money(-d.free)}` : money(d.free) }), h('small', { text: neg ? 'manquant' : 'de marge' })));
+      return h('div', { class: 'fc-item', dataset: { open: String(open) } },
+        h('button', { type: 'button', class: 'fc-row', dataset: { key: f.key, negative: String(neg), current: String(f.key === currentMonth()) }, 'aria-expanded': String(open) },
+          h('span', { class: 'fc-month' }, h('strong', { text: monthShort(f.key) }), h('small', { text: f.key.slice(0, 4) })),
+          h('span', { class: 'fc-body' },
+            h('span', { class: 'fc-bar', role: 'img', 'aria-label': `${monthName(f.key)} : ${FC_PARTS.map(([k, l]) => `${l} ${money(parts[k])}`).join(', ')}, ${neg ? `manque ${money(-d.free)}` : `marge ${money(d.free)}`}` },
+              FC_PARTS.map(([k]) => h('i', { class: `fc-seg fc-${k}`, style: `width:${pct(parts[k])}` })),
+              h('i', { class: neg ? 'fc-over' : 'fc-free', style: `width:${pct(Math.abs(d.free))}` })),
+            h('small', { text: notes.length ? notes.join(' · ') + (f.planned.length > 3 ? '…' : '') : `${money(d.allocated)} prévus sur ${money(d.income)}` })),
+          h('span', { class: 'fc-free-amount' }, h('strong', { text: neg ? `−${money(-d.free)}` : money(d.free) }), h('small', { text: neg ? 'manquant' : 'de marge' }))),
+        open ? h('div', { class: 'fc-detail' },
+          h('div', { class: 'fc-line' }, h('span', { text: 'Revenus' }), h('b', { text: `+${money(d.income)}` })),
+          FC_PARTS.map(([k, label]) => h('div', { class: 'fc-line' }, h('span', {}, h('i', { class: `dot fc-dot-${k}` }), label), h('b', { text: `−${money(parts[k])}` }))),
+          h('div', { class: 'fc-line fc-total', dataset: { negative: String(neg) } }, h('span', { text: neg ? 'Manque' : 'Marge' }), h('b', { text: money(d.free) })),
+          f.planned.length ? h('p', { class: 'muted small', text: f.planned.map((p) => `${shortDate(p.date)} : ${p.label} ${signed(p.amount)}`).join(' · ') }) : null) : null);
     }));
   }
 
@@ -3671,7 +3823,11 @@
       h('div', { class: 'wd-bars' }, ['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((l, i) => h('div', { class: 'wd', title: money(wd[i]) },
         h('span', { class: 'wd-col' }, h('i', { style: `height:${Math.round((wd[i] / wdMax) * 100)}%` })),
         h('small', { text: l })))),
-      top ? h('p', { class: 'muted small', text: `Jour le plus dépensier : ${dayHeading(top[0]).toLowerCase()} (${money(top[1])}). Hors prélèvements automatiques.` }) : null);
+      top ? h('p', { class: 'muted small', text: `Jour le plus dépensier : ${dayHeading(top[0]).toLowerCase()} (${money(top[1])}). Hors prélèvements automatiques.` }) : null,
+      renderHours(key));
+    renderHealth(key);
+    renderSuggestions(key);
+    renderReports();
 
     const notes = [];
     const ranked = [...d.spend].filter((r) => r.inMonth > 0).sort((a, b) => b.inMonth - a.inMonth);
@@ -5318,6 +5474,130 @@
     toast(`Demain : ${due.slice(0, 3).map((e) => `${e.label} (${money(-e.amount)})`).join(', ')}${due.length > 3 ? '…' : ''} · ${money(total)} au total.`, { duration: 6000 });
   }
 
+  // ——— Bilan : heures, santé du budget, suggestions, rapports ———
+  function renderHours(key) {
+    const slots = spendingHours(key);
+    const max = Math.max(1, ...slots.map((s) => s.total));
+    if (!slots.some((s) => s.n)) return null;
+    return h('div', { class: 'hours' },
+      h('h4', { text: 'Tes heures de dépense' }),
+      slots.map((s) => h('div', { class: 'hour-row' },
+        h('span', { text: s.label }),
+        h('span', { class: 'hour-bar' }, h('i', { style: `width:${Math.round((s.total / max) * 100)}%` })),
+        h('small', { text: s.n ? `${money(s.total)} · ${s.n}` : '—' }))),
+      h('p', { class: 'muted small', text: 'D\'après l\'heure de saisie des dépenses notées le jour même.' }));
+  }
+
+  function renderHealth(key) {
+    const hs = healthScore(key);
+    const history = monthlyReport(6).map((m) => {
+      const c = state.closings.find((x) => x.key === m.key);
+      return { key: m.key, score: c && Number.isFinite(c.snapshot.health) ? c.snapshot.health : m.health };
+    });
+    fill(els.rHealth,
+      h('div', { class: 'health-head' },
+        h('div', { class: 'health-score', dataset: { level: hs.score >= 80 ? 'top' : hs.score >= 60 ? 'good' : hs.score >= 40 ? 'mid' : 'low' } },
+          h('strong', { text: String(hs.score) }), h('small', { text: '/100' })),
+        h('div', {}, h('h3', { text: `Santé du budget : ${hs.label.toLowerCase()}` }), h('p', { class: 'muted small', text: 'Un repère pour progresser, calculé sur six points. Touche un point pour le conseil.' }))),
+      h('ul', { class: 'health-factors' }, hs.factors.map((f) => h('li', { dataset: { full: String(f.points === f.max) } },
+        h('details', {}, h('summary', {}, h('span', { text: f.label }), h('b', { text: `${f.points}/${f.max}` })), h('p', { class: 'muted small', text: f.tip }))))),
+      history.length > 1 ? h('div', { class: 'health-trend', 'aria-label': 'Évolution du score' },
+        history.map((m) => h('div', { class: 'ht-col', title: `${monthName(m.key)} : ${m.score}/100` },
+          h('span', { class: 'ht-bar' }, h('i', { style: `height:${m.score}%` })), h('small', { text: monthShort(m.key) })))) : null);
+  }
+
+  function renderSuggestions(key) {
+    const isNow = key === currentMonth();
+    const items = [];
+    if (isNow) {
+      for (const s of envelopeSuggestions()) items.push({ icon: s.kind === 'over' ? 'trending-up' : 'trending-down', text: s.text, action: { label: `Passer à ${moneyRound(s.to)}`, run: `budget:${s.env.id}:${s.to}` } });
+      if (state.closings.length < 3) items.push({ icon: 'hourglass', text: `Encore ${3 - state.closings.length} ${plural(3 - state.closings.length, 'mois clôturé', 'mois clôturés')} et BudgetFold te proposera des budgets ajustés à tes vraies dépenses.` });
+      const subs = subscriptionsCost();
+      if (subs.list.length) {
+        items.push({ icon: 'repeat', text: `Tes abonnements coûtent ${moneyRound(subs.total)} par an : ${subs.list.slice(0, 3).map((x) => `${x.rule.label} ${moneyRound(x.yearly)}`).join(', ')}${subs.list.length > 3 ? '…' : ''}.` });
+        for (const x of subs.list.filter((y) => y.old).slice(0, 2)) items.push({ icon: 'circle-help', text: `« ${x.rule.label} » depuis plus de 6 mois (${moneyRound(x.yearly)}/an) : tu t'en sers toujours ?`, action: { label: 'Arrêter', run: `stop:${x.rule.id}` } });
+      }
+      const streak = noSpendStreak();
+      if (streak.best >= 2) items.push({ icon: 'flame', text: streak.current >= 1 ? `${streak.current} ${plural(streak.current, 'jour', 'jours')} sans dépense d'affilée (hors prélèvements). Ton record sur 60 jours : ${streak.best}.` : `Ton record de jours sans dépense sur 60 jours : ${streak.best}. Prochain défi : le battre !` });
+    }
+    const d = derive(key);
+    if (d.income > 0) {
+      const sp = splitNeeds(d);
+      items.push({ icon: 'chart-pie', text: `Besoins ${sp.pNeeds} % · envies ${sp.pWants} % · épargne et marge ${sp.pSavings} % de tes revenus. Repère indicatif : 50/30/20. Taux d'épargne du mois : ${sp.rate} %.` });
+    }
+    fill(els.rSuggest, h('h3', { text: 'Suggestions' }), items.map((it) => h('div', { class: 'note-line suggest' },
+      icon(it.icon), h('span', { text: it.text }),
+      it.action ? h('button', { type: 'button', class: 'btn ghost compact', dataset: { run: it.action.run } }, it.action.label) : null)));
+    flushIcons();
+  }
+
+  els.rSuggest.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-run]');
+    if (!b) return;
+    const [kind, id, value] = b.dataset.run.split(':');
+    if (kind === 'budget') {
+      const env = spendEnv(id);
+      if (!env) return;
+      const before = env.max;
+      const res = updateEnvelope(id, { name: env.name, max: Number(value), period: env.period });
+      if (!res.ok) return toast(res.error, 'error');
+      toast(`« ${env.name} » passe à ${money(Number(value))}.`, { action: { label: 'Annuler', run: () => updateEnvelope(id, { name: env.name, max: before, period: env.period }) } });
+    } else if (kind === 'stop') {
+      const rule = findRule(id);
+      if (!rule) return;
+      const ok2 = await confirmAction({ title: `Arrêter « ${rule.label} » ?`, text: 'Les paiements déjà passés restent dans ton journal. Pense aussi à résilier l\'abonnement chez le fournisseur.', confirmLabel: 'Arrêter', danger: true });
+      if (ok2 && deleteRule(id).ok) toast('Abonnement retiré de l\'échéancier.', { action: { label: 'Annuler', run: () => { state.recurring.push(rule); commit(); } } });
+    }
+  });
+
+  // Rapports : par enveloppe, revenus contre dépenses, épargne cumulée, patrimoine.
+  const REPORTS = [['env', 'Par enveloppe'], ['flow', 'Revenus et dépenses'], ['savings', 'Épargne cumulée'], ['worth', 'Patrimoine']];
+  function renderReports() {
+    const view = ui.reportView || 'env';
+    const months = monthlyReport(6);
+    const bars = (rows, max) => h('div', { class: 'rep-bars' }, rows.map((r) => h('div', { class: 'rep-col', title: r.title },
+      h('span', { class: 'rep-stack' }, r.parts.map((p) => h('i', { class: `rep-${p.cls}`, style: `height:${max > 0 ? Math.round((Math.max(0, p.v) / max) * 100) : 0}%` }))),
+      h('small', { text: r.label }))));
+    let body;
+    if (view === 'env') {
+      const names = [...new Map(months.flatMap((m) => m.byEnv.map((x) => [x.id, x.name]))).entries()];
+      body = h('div', { class: 'rep-table' },
+        h('div', { class: 'rep-tr rep-th' }, h('span', { text: 'Enveloppe' }), months.map((m) => h('span', { text: monthShort(m.key) }))),
+        names.map(([id, name]) => h('div', { class: 'rep-tr' }, h('span', { text: name }), months.map((m) => {
+          const x = m.byEnv.find((y) => y.id === id);
+          return h('span', { text: x && x.spent ? moneyRound(x.spent) : '—' });
+        }))));
+    } else if (view === 'flow') {
+      const max = Math.max(1, ...months.map((m) => Math.max(m.income, m.spent)));
+      body = [bars(months.map((m) => ({ label: monthShort(m.key), title: `${monthName(m.key)} : revenus ${money(m.income)}, dépenses ${money(m.spent)}`, parts: [{ cls: 'in', v: m.income }, { cls: 'out', v: m.spent }] })), max),
+        h('ul', { class: 'chart-legend' }, h('li', {}, h('i', { class: 'dot dot-income' }), 'Revenus'), h('li', {}, h('i', { class: 'dot dot-spent' }), 'Dépenses'))];
+    } else if (view === 'savings') {
+      const max = Math.max(1, ...months.map((m) => m.cumul));
+      body = [bars(months.map((m) => ({ label: monthShort(m.key), title: `${monthName(m.key)} : ${money(m.cumul)} cumulés`, parts: [{ cls: 'save', v: m.cumul }] })), max),
+        h('p', { class: 'muted small', text: `Mis de côté depuis ${monthName(months[0].key).toLowerCase()} : ${money(months[months.length - 1].cumul)} (mises et versements sur tes projets).` })];
+    } else {
+      const accs = state.accounts.map((a) => ({ a, bal: accountBalance(a) }));
+      const known = accs.filter((x) => x.bal !== null);
+      const total = known.reduce((s, x) => s + x.bal, 0);
+      const projects = state.envelopes.filter((e) => e.kind === 'project').reduce((s, e) => s + e.saved, 0);
+      body = h('div', { class: 'worth' },
+        h('div', { class: 'tile tile-hero' }, h('span', { text: 'Patrimoine (soldes de tes comptes)' }), h('strong', { text: known.length ? money(total) : 'Inconnu' })),
+        accs.map((x) => h('div', { class: 'fc-line' }, h('span', { text: x.a.name }), h('b', { text: x.bal === null ? 'solde inconnu' : money(x.bal) }))),
+        h('div', { class: 'fc-line' }, h('span', { text: 'Dont mis de côté pour tes projets' }), h('b', { text: money(projects) })),
+        h('p', { class: 'muted small', text: known.length < accs.length ? 'Renseigne le solde de chaque compte (menu › Comptes) pour un patrimoine complet.' : 'Tes projets sont des enveloppes virtuelles à l\'intérieur de tes comptes : ils ne s\'ajoutent pas aux soldes.' }));
+    }
+    fill(els.rReports,
+      h('h3', { text: 'Rapports' }),
+      h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Choisir le rapport' }, REPORTS.map(([k, label]) => h('button', { type: 'button', class: 'chip', role: 'radio', 'aria-checked': String(view === k), dataset: { report: k } }, h('span', { text: label })))),
+      h('div', { class: 'rep-body' }, body));
+  }
+  els.rReports.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-report]');
+    if (!b) return;
+    ui.reportView = b.dataset.report;
+    renderReports();
+  });
+
   // ——— Micro-entreprise : bilan pro et seuils ———
   function proThresholds(year) {
     const pro = state.prefs.pro;
@@ -6179,6 +6459,7 @@
   els.forecast.addEventListener('click', (e) => {
     const row = e.target.closest('[data-key]');
     if (!row) return;
+    ui.forecastOpen = ui.forecastOpen === row.dataset.key ? null : row.dataset.key;
     agendaGo(row.dataset.key);
     const top = els.calendar.closest('.card').getBoundingClientRect().top;
     window.scrollTo({ top: window.scrollY + top - 90, behavior: reduceMotion ? 'auto' : 'smooth' });
@@ -6340,6 +6621,7 @@
     projectResults, simulate, runScenarios, projectAdvice, monthlyOf, projectContribution,
     Photos, savePhoto, compressPhoto, readZip, makeZip, fullBackupZip, proofsZip, pdfText, cropCanvas, proRevenue,
     accountBalance, frequentAmounts, favoriteSuggestions, searchTransactions, detectSubscriptions, buildIcs,
+    healthScore, monthlyReport, envelopeSuggestions, subscriptionsCost, noSpendStreak, splitNeeds, spendingHours,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,

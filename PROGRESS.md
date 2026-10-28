@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 6 — Analyses et optimisation**
+**Phase 7 — Interface, personnalisation et prise en main**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -137,7 +137,23 @@ Décisions de la phase 5 :
 - Préréglages bancaires construits d'après les formats publics connus (pas de vrais relevés disponibles) ; la détection automatique reste le choix par défaut.
 
 ## Phase 6 — Analyses et optimisation
-_À planifier._
+Plan :
+1. Moteur : `healthScore` (6 facteurs, sur 100), `envelopeSuggestions` (3 mois clôturés), `subscriptionsCost`, `noSpendStreak`, `splitNeeds` (50/30/20 indicatif), `monthlyReport`, `spendingHours`.
+2. Bilan : cartes « Santé du budget » (facteurs expliqués + évolution), « Suggestions » (boutons « Passer à X € », « Arrêter »), « Rapports » (par enveloppe, revenus et dépenses, épargne cumulée, patrimoine), heures de dépense.
+3. Agenda : prévisions sur 6 mois découpées par type, légende, détail au toucher.
+
+- [x] Moteur de suggestions (enveloppe sous-utilisée ou dépassée 3 mois de suite, abonnements, 50/30/20, série sans dépense)
+- [x] Rapports (par enveloppe et par mois, revenus contre dépenses, épargne cumulée, patrimoine, jours et heures)
+- [x] Prévisions sur 6 mois par type, légende, détail au toucher
+- [x] Score de santé sur 100, expliqué, avec son évolution
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 6 :
+- Score : reste à vivre (25), enveloppes tenues (20), épargne du mois (20, plein à 20 % des revenus), matelas (15, plein à 3 mois de dépenses), mois à venir (10), suivi et sauvegarde (10). Ce sont des repères pédagogiques, pas des taux financiers ; le score figé est gardé dans l'instantané de clôture.
+- Besoins / envies (50/30/20) : classement d'après le nom de l'enveloppe (courses, transport, santé… = besoins) ; affiché « à titre indicatif ».
+- Abonnement « peut-être plus utilisé » : abonnement de plus de 6 mois à l'échéancier ; l'app pose la question, sans rien supprimer seule.
+- Patrimoine = soldes des comptes ; les projets sont affichés comme la part mise de côté, sans être ajoutés (ce serait les compter deux fois).
+- Heures de dépense : heure de saisie des dépenses notées le jour même (l'app ne connaît pas l'heure réelle d'achat).
 
 ## Phase 7 — Interface, personnalisation et prise en main
 _À planifier._
