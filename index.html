@@ -222,6 +222,16 @@
               <div class="day-detail" id="day-detail"></div>
             </article>
 
+            <article class="card pad" id="order-card">
+              <div class="card-head">
+                <div>
+                  <h2>Ordre du mois</h2>
+                  <p class="muted">Dans quel ordre l'argent arrive et repart.</p>
+                </div>
+              </div>
+              <ol class="order" id="order-list"></ol>
+            </article>
+
             <article class="card pad">
               <div class="card-head">
                 <div>
@@ -267,15 +277,24 @@
               <h1>Bilan</h1>
               <p>Comprendre où part ton argent.</p>
             </header>
-            <div class="period">
-              <button type="button" class="icon-btn" id="r-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
-              <strong id="r-label"></strong>
-              <button type="button" class="icon-btn" id="r-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
+            <div class="segmented" id="r-mode" role="radiogroup" aria-label="Affichage du bilan">
+              <input type="radio" name="r-mode" id="r-mode-month" value="month" checked>
+              <label for="r-mode-month"><i data-lucide="calendar"></i>Mois</label>
+              <input type="radio" name="r-mode" id="r-mode-history" value="history">
+              <label for="r-mode-history"><i data-lucide="history"></i>Historique</label>
             </div>
-            <div class="tiles" id="r-tiles"></div>
-            <article class="card pad" id="r-bars"></article>
-            <article class="card pad" id="r-days"></article>
-            <article class="card pad" id="r-notes"></article>
+            <div id="r-month">
+              <div class="period">
+                <button type="button" class="icon-btn" id="r-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
+                <strong id="r-label"></strong>
+                <button type="button" class="icon-btn" id="r-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
+              </div>
+              <div class="tiles" id="r-tiles"></div>
+              <article class="card pad" id="r-bars"></article>
+              <article class="card pad" id="r-days"></article>
+              <article class="card pad" id="r-notes"></article>
+            </div>
+            <div id="r-history" hidden></div>
           </section>
         </div>
       </section>
@@ -467,12 +486,83 @@
       <p class="hint" id="env-hint"></p>
       <p class="field-error" id="env-error" role="alert" hidden></p>
       <div class="env-extra" id="env-extra" hidden>
+        <button type="button" class="btn ghost" id="env-move"><i data-lucide="arrow-left-right"></i>Déplacer de l'argent</button>
         <button type="button" class="btn ghost" id="env-reset"><i data-lucide="rotate-ccw"></i>Remettre à zéro</button>
         <button type="button" class="btn ghost danger-text" id="env-delete"><i data-lucide="trash-2"></i>Supprimer</button>
       </div>
       <div class="sheet-actions">
         <button type="button" class="btn ghost" data-close>Annuler</button>
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-close" aria-labelledby="close-title">
+    <form id="close-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="close-title">Clôture du mois</h2>
+          <p id="close-sub">Le mois est terminé. Que faire de ce qui reste ?</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="tiles" id="close-tiles"></div>
+      <div class="field">
+        <span class="field-label" id="close-all-label">Pour toutes les enveloppes</span>
+        <div class="segmented three" id="close-all" role="radiogroup" aria-labelledby="close-all-label">
+          <input type="radio" name="close-all" id="close-all-keep" value="keep">
+          <label for="close-all-keep"><i data-lucide="archive"></i>Reporter</label>
+          <input type="radio" name="close-all" id="close-all-budget" value="budget">
+          <label for="close-all-budget"><i data-lucide="wallet"></i>Au budget</label>
+          <input type="radio" name="close-all" id="close-all-project" value="project">
+          <label for="close-all-project"><i data-lucide="piggy-bank"></i>Épargner</label>
+        </div>
+      </div>
+      <div class="close-list" id="close-list"></div>
+      <p class="hint" id="close-hint"></p>
+      <label class="check-row">
+        <input type="checkbox" id="close-auto">
+        <span><strong>Faire ainsi automatiquement les prochains mois</strong><small>Modifiable dans Réglages.</small></span>
+      </label>
+      <p class="field-error" id="close-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="close-later">Plus tard</button>
+        <button type="submit" class="btn primary" id="close-submit">Clôturer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-move" aria-labelledby="move-title">
+    <form id="move-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="move-title">Déplacer de l'argent</h2>
+          <p>Pour couvrir un dépassement ou réajuster ton mois. Une trace reste dans le journal.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="field">
+        <label for="move-amount">Montant</label>
+        <div class="money-input large">
+          <input id="move-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+          <span>€</span>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="move-from">Depuis</label>
+          <div class="select-wrap"><select id="move-from"></select></div>
+        </div>
+        <div class="field">
+          <label for="move-to">Vers</label>
+          <div class="select-wrap"><select id="move-to"></select></div>
+        </div>
+      </div>
+      <p class="hint" id="move-hint"></p>
+      <p class="field-error" id="move-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Déplacer</button>
       </div>
     </form>
   </dialog>
@@ -490,6 +580,20 @@
         <label for="set-day">Jour de réception du salaire</label>
         <input id="set-day" type="text" inputmode="numeric" autocomplete="off" placeholder="1 à 31">
       </div>
+      <div class="field">
+        <span class="field-label" id="set-cycle-label">Début du mois budgétaire</span>
+        <div class="segmented" id="set-cycle" role="radiogroup" aria-labelledby="set-cycle-label">
+          <input type="radio" name="set-cycle" id="set-cycle-pay" value="pay">
+          <label for="set-cycle-pay"><i data-lucide="banknote"></i><span id="set-cycle-pay-text">Jour de paie</span></label>
+          <input type="radio" name="set-cycle" id="set-cycle-calendar" value="calendar">
+          <label for="set-cycle-calendar"><i data-lucide="calendar"></i>Le 1er du mois</label>
+        </div>
+        <p class="hint small-hint">Tes enveloppes, ton reste à vivre et tes bilans suivent ce cycle. Les enveloppes au mois repartent à zéro automatiquement à chaque début de cycle.</p>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="set-auto-close">
+        <span><strong>Clôturer les mois automatiquement</strong><small>Avec tes derniers choix (reporter, remettre au budget ou épargner), sans ouvrir l'assistant.</small></span>
+      </label>
       <div class="field">
         <label for="set-opening">Solde du compte au 1er du mois (facultatif)</label>
         <div class="money-input">
@@ -594,6 +698,12 @@
           <button type="button" class="menu-item" id="menu-settings">
             <span class="menu-ico"><i data-lucide="calendar-clock"></i></span>
             <span><strong>Réglages</strong><small>Jour de paie, solde de départ</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-reset-all">
+            <span class="menu-ico"><i data-lucide="rotate-ccw"></i></span>
+            <span><strong>Remettre toutes les enveloppes à zéro</strong><small>Les dépenses restent dans le journal</small></span>
           </button>
         </li>
         <li>

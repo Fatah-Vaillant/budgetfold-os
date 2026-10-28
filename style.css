@@ -3377,3 +3377,261 @@ input[type="month"] {
   outline: 2px solid var(--navy-1);
   outline-offset: 2px;
 }
+
+/* ——— Phase 2 : clôture, déplacements, ordre du mois, historique ——— */
+.small-hint {
+  margin-top: 6px;
+  font-size: 0.78rem;
+}
+
+.tile[data-negative="true"] strong {
+  color: var(--rose-ink);
+}
+
+#r-mode {
+  margin-bottom: 16px;
+}
+
+.close-list {
+  display: grid;
+  gap: 8px;
+}
+
+.close-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.close-row[data-tone="bad"] {
+  border-color: #fecdd3;
+  background: var(--rose-soft);
+}
+
+.close-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.close-main strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+
+.close-main small,
+.close-note {
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.close-select {
+  max-width: 220px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+@media (max-width: 520px) {
+  .close-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .close-select {
+    max-width: none;
+    width: 100%;
+  }
+}
+
+.order {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.order-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.order-step:not([data-last="true"])::after {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 46px;
+  bottom: -10px;
+  width: 2px;
+  background: var(--line);
+}
+
+.order-dot {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--navy-1);
+  background: var(--sky-soft);
+}
+
+.order-dot .lucide {
+  width: 17px;
+  height: 17px;
+}
+
+.order-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.order-body small {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.order-amount {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.order-step[data-last="true"] .order-dot {
+  color: var(--emerald-ink);
+  background: var(--emerald-soft);
+}
+
+.order-step[data-negative="true"] .order-amount {
+  color: var(--rose-ink);
+}
+
+#r-history {
+  display: grid;
+  gap: 16px;
+}
+
+#r-history[hidden] {
+  display: none;
+}
+
+.chips.range .chip {
+  min-height: 44px;
+  justify-content: center;
+}
+
+.chip[aria-checked="true"] {
+  border-color: var(--navy-1);
+  background: var(--sky-soft);
+}
+
+.trend-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.trend-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.trend-main small {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 32px;
+}
+
+.spark i {
+  width: 8px;
+  border-radius: 3px;
+  background: var(--emerald);
+}
+
+.spark i[data-over="true"] {
+  background: var(--rose);
+}
+
+.hist-month {
+  border-top: 1px solid var(--line-soft);
+}
+
+.hist-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.hist-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hist-title small {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.hist-head b[data-negative="true"] {
+  color: var(--rose-ink);
+}
+
+.hist-detail {
+  display: grid;
+  gap: 6px;
+  padding: 0 0 12px;
+}
+
+.hist-env {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+
+.hist-env small {
+  color: var(--ink-2);
+}
+
+.badge[data-tone="bad"] {
+  color: var(--rose-ink);
+  background: var(--rose-soft);
+}

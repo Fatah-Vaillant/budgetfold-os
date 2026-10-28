@@ -55,7 +55,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
   - Projets enregistrés, avec **notes libres** (liste d'achats, liens, étapes).
   - Petits et grands projets : maison, moto, achats du quotidien, organisation.
 
-## 3. Fin de mois, remises à zéro et historique (P1)
+## 3. Fin de mois, remises à zéro et historique (P1) — ✅ fait (phase 2)
 
 - **Remise à zéro de toutes les enveloppes d'un coup** : manuelle, ou automatique **au jour de paie** ou **le 1er du mois** (réglage).
 - **Choisir quoi faire du reste** à la clôture, enveloppe par enveloppe ou globalement :

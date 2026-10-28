@@ -229,12 +229,19 @@
     salaryDay: 1,
     openingBalance: null,
     lastRollover: monthOf(clock.today()),
+    lastClosed: null,
     envelopes: [],
     recurring: [],
     transactions: [],
     rules: [],
-    prefs: { onboarded: false, lastEnvId: null, since: clock.today(), lastExport: null }
+    moves: [],
+    closings: [],
+    prefs: {
+      onboarded: false, lastEnvId: null, since: clock.today(), lastExport: null, cycle: 'pay', safetyCreated: false,
+      closing: { env: 'keep', free: 'budget', projectId: null, auto: false }
+    }
   });
+  const CLOSE_ACTIONS = ['keep', 'budget', 'project'];
 
   const initialPostedUntil = (start) => addDays(maxISO(start, firstOf(monthOf(clock.today()))), -1);
 
@@ -274,6 +281,7 @@
           startMonth: isMonthKey(e.startMonth) ? e.startMonth : null,
           createdAt
         });
+        if (e.safety === true) s.envelopes[s.envelopes.length - 1].safety = true;
       } else {
         const max = toCents(e.max);
         if (max <= 0) continue;
@@ -325,6 +333,7 @@
       if (detail) tx.detail = detail;
       if (typeof t.recId === 'string' && t.recId) tx.recId = t.recId;
       if (type === 'deposit' && isMonthKey(t.covers)) tx.covers = t.covers;
+      if (type === 'deposit' && t.src === 'close' && isMonthKey(t.closeKey)) Object.assign(tx, { src: 'close', closeKey: t.closeKey });
       if (typeof t.ref === 'string' && t.ref) tx.ref = t.ref.slice(0, 120);
       s.transactions.push(tx);
     }
@@ -339,6 +348,44 @@
     s.prefs.lastEnvId = raw.prefs && isSpend(raw.prefs.lastEnvId) ? raw.prefs.lastEnvId : null;
     if (raw.prefs && isISO(raw.prefs.since)) s.prefs.since = raw.prefs.since;
     if (raw.prefs && isISO(raw.prefs.lastExport)) s.prefs.lastExport = raw.prefs.lastExport;
+    const rp = raw.prefs || {};
+    if (rp.cycle === 'calendar' || rp.cycle === 'pay') s.prefs.cycle = rp.cycle;
+    s.prefs.safetyCreated = Boolean(rp.safetyCreated);
+    const rc = rp.closing || {};
+    s.prefs.closing = {
+      env: CLOSE_ACTIONS.includes(rc.env) ? rc.env : 'keep',
+      free: rc.free === 'project' ? 'project' : 'budget',
+      projectId: typeof rc.projectId === 'string' && envIds.has(rc.projectId) ? rc.projectId : null,
+      auto: Boolean(rc.auto)
+    };
+    if (isMonthKey(raw.lastClosed)) s.lastClosed = raw.lastClosed;
+
+    const spendIds = new Set(s.envelopes.filter((e) => e.kind === 'spend').map((e) => e.id));
+    const endpoint = (v) => v === 'free' || spendIds.has(v);
+    for (const m of arr(raw.moves)) {
+      if (!m || !isMonthKey(m.key) || !isISO(m.date) || !endpoint(m.from) || !endpoint(m.to) || m.from === m.to) continue;
+      const amount = toCents(m.amount);
+      if (amount <= 0) continue;
+      s.moves.push({ id: takeId(m.id), key: m.key, date: m.date, from: m.from, to: m.to, amount, ts: Number.isFinite(m.ts) ? m.ts : 0 });
+    }
+    // Clôtures : l'instantané est recopié tel quel (historique figé), seuls les champs reconnus sont gardés.
+    const seen = new Set();
+    for (const c of arr(raw.closings)) {
+      if (!c || !isMonthKey(c.key) || seen.has(c.key) || !c.snapshot || typeof c.snapshot !== 'object') continue;
+      seen.add(c.key);
+      const lines = arr(c.lines).filter((l) => l && typeof l.envId === 'string').map((l) => ({
+        envId: l.envId, name: cleanName(l.name) || 'Enveloppe', left: clampInt(l.left, -MAX_CENTS, MAX_CENTS, 0),
+        action: CLOSE_ACTIONS.includes(l.action) ? l.action : 'keep', projectId: typeof l.projectId === 'string' ? l.projectId : null
+      }));
+      s.closings.push({
+        key: c.key, at: Number.isFinite(c.at) ? c.at : 0, lines,
+        free: clampInt(c.free, -MAX_CENTS, MAX_CENTS, 0),
+        freeAction: c.freeAction === 'project' ? 'project' : 'budget',
+        freeProjectId: typeof c.freeProjectId === 'string' ? c.freeProjectId : null,
+        snapshot: JSON.parse(JSON.stringify(c.snapshot))
+      });
+    }
+    s.closings.sort((a, b) => (a.key < b.key ? -1 : 1));
     return s;
   }
 
@@ -347,6 +394,8 @@
     if (!raw || typeof raw !== 'object') return null;
     const prefs = { ...(raw.prefs || {}) };
     if (!isISO(prefs.since)) prefs.since = clock.today();
+    // Les anciennes versions comptaient en mois calendaires : on garde ce cycle pour ne changer aucun chiffre.
+    if (!prefs.cycle) prefs.cycle = 'calendar';
     return { ...raw, v: 4, prefs };
   }
 
@@ -465,14 +514,44 @@
     render();
   }
 
-  const currentMonth = () => monthOf(clock.today());
+  // Mois budgétaire : il commence au jour de paie (réglage `prefs.cycle = 'pay'`) ou le 1er (`'calendar'`).
+  // Un mois commencé après le 15 porte le nom du mois suivant (paie le 28 octobre → budget de novembre).
+  const cycleDay = () => (state.prefs.cycle === 'pay' ? clampInt(state.salaryDay, 1, 31, 1) : 1);
+  function cycleStart(key) {
+    const day = cycleDay();
+    if (day === 1) return firstOf(key);
+    const k = day > 15 ? shiftMonth(key, -1) : key;
+    return isoFor(k, clampDay(day, k));
+  }
+  const cycleEnd = (key) => addDays(cycleStart(shiftMonth(key, 1)), -1);
+  function budgetKey(iso) {
+    const k = monthOf(iso);
+    if (iso < cycleStart(k)) return shiftMonth(k, -1);
+    if (iso > cycleEnd(k)) return shiftMonth(k, 1);
+    return k;
+  }
+  const inCycle = (iso, key) => iso >= cycleStart(key) && iso <= cycleEnd(key);
+  const cycleLength = (key) => daysBetween(cycleStart(key), cycleEnd(key)) + 1;
+  // Jours de paie (salaire) compris dans un mois budgétaire.
+  function payDates(key) {
+    const s = cycleStart(key);
+    const e = cycleEnd(key);
+    const out = [];
+    for (let m = shiftMonth(monthOf(s), 0); m <= monthOf(e); m = shiftMonth(m, 1)) {
+      const d = isoFor(m, clampDay(state.salaryDay, m));
+      if (d >= s && d <= e) out.push(d);
+    }
+    return out;
+  }
+  const periodLabel = (key) => (cycleDay() === 1 ? monthName(key) : `${monthName(key)} · ${shortDate(cycleStart(key))} → ${shortDate(cycleEnd(key))}`);
+  const currentMonth = () => budgetKey(clock.today());
   const findEnv = (id) => state.envelopes.find((e) => e.id === id);
   const findRule = (id) => state.recurring.find((r) => r.id === id);
   const spendEnv = (id) => {
     const e = findEnv(id);
     return e && e.kind === 'spend' ? e : null;
   };
-  const projectDone = (e) => e.saved >= e.target;
+  const projectDone = (e) => !e.safety && e.saved >= e.target;
 
   function occurrences(rule, from, to) {
     const out = [];
@@ -526,8 +605,8 @@
   function periodWindow(env, iso) {
     const p = env.period || 'month';
     if (p === 'month') {
-      const k = monthOf(iso);
-      return { start: firstOf(k), end: lastOf(k) };
+      const k = budgetKey(iso);
+      return { start: cycleStart(k), end: cycleEnd(k) };
     }
     if (p === 'week' || p === '2weeks') {
       const monday = mondayOf(iso);
@@ -538,11 +617,11 @@
       return { start: s, end: addDays(s, 13) };
     }
     const step = MONTH_STEPS[p] || 1;
-    const a = monthOf(env.anchor || iso);
-    const k = Math.floor(monthDiff(a, monthOf(iso)) / step);
+    const a = budgetKey(env.anchor || iso);
+    const k = Math.floor(monthDiff(a, budgetKey(iso)) / step);
     const sk = shiftMonth(a, k * step);
     const ek = shiftMonth(sk, step - 1);
-    return { start: firstOf(sk), end: lastOf(ek) };
+    return { start: cycleStart(sk), end: cycleEnd(ek) };
   }
 
   const isResetOut = (env, t) => Boolean(env.reset && t.ts < env.reset.ts && t.date <= env.reset.date);
@@ -565,28 +644,52 @@
     return { spent, planned, excluded, total: spent + planned };
   }
 
+  // Reste reporté dans l'enveloppe à la clôture du mois précédent (« le reste reste là »).
+  function carryIn(env, key) {
+    const c = state.closings.find((x) => x.key === shiftMonth(key, -1));
+    if (!c) return 0;
+    return c.lines.reduce((s, l) => s + (l.envId === env.id && l.action === 'keep' && l.left > 0 ? l.left : 0), 0);
+  }
+  // Argent déplacé vers (+) ou depuis (−) une enveloppe pendant un mois budgétaire.
+  const movedNet = (envId, key) => state.moves.reduce((s, m) => s + (m.key !== key ? 0 : m.to === envId ? m.amount : m.from === envId ? -m.amount : 0), 0);
+  const isLongPeriod = (env) => !['month', 'week', '2weeks'].includes(env.period);
+  // Mois budgétaires couverts par la période d'une enveloppe (un seul pour une enveloppe au mois).
+  function windowKeys(env, w) {
+    const keys = [];
+    for (let k = budgetKey(w.start); k <= budgetKey(w.end); k = shiftMonth(k, 1)) keys.push(k);
+    return keys;
+  }
+
   function envMonthAlloc(env, key) {
     const eq = env.period === 'month' ? env.max : monthlyEq(env.max, env.period);
-    const ms = firstOf(key);
-    const me = lastOf(key);
+    const ms = cycleStart(key);
+    const me = cycleEnd(key);
     const inMonth = envCommitted(env, ms, me).total;
-    if (['month', 'week', '2weeks'].includes(env.period)) return { alloc: Math.max(eq, inMonth), eq, inMonth };
+    const moved = movedNet(env.id, key);
+    const carry = carryIn(env, key);
+    if (!isLongPeriod(env)) return { alloc: Math.max(0, eq + moved, inMonth - carry), eq, inMonth, moved, carry };
     const w = periodWindow(env, ms);
+    const keys = windowKeys(env, w);
+    const cap = env.max + carryIn(env, keys[0]) + keys.filter((k) => k < key).reduce((s, k) => s + movedNet(env.id, k), 0);
     const before = w.start < ms ? envCommitted(env, w.start, addDays(ms, -1)).total : 0;
-    const excess = Math.max(0, before + inMonth - env.max) - Math.max(0, before - env.max);
-    return { alloc: eq + excess, eq, inMonth };
+    const excess = Math.max(0, before + inMonth - cap - moved) - Math.max(0, before - cap);
+    return { alloc: Math.max(0, eq + moved + excess), eq, inMonth, moved, carry };
   }
 
   function envRow(env, key) {
     const today = clock.today();
-    const cm = monthOf(today);
-    const ref = key === cm ? today : key < cm ? lastOf(key) : firstOf(key);
+    const cm = currentMonth();
+    const ref = key === cm ? today : key < cm ? cycleEnd(key) : cycleStart(key);
     const w = periodWindow(env, ref);
     const c = envCommitted(env, w.start, w.end);
     const m = envMonthAlloc(env, key);
+    const keys = env.period === 'week' || env.period === '2weeks' ? [] : windowKeys(env, w);
+    const carry = keys.length ? carryIn(env, keys[0]) : 0;
+    const moved = keys.reduce((s, k) => s + movedNet(env.id, k), 0);
+    const budget = env.max + carry + moved;
     return {
       env, window: w, spent: c.spent, planned: c.planned, excluded: c.excluded,
-      used: c.total, left: env.max - c.total, alloc: m.alloc, eq: m.eq, inMonth: m.inMonth
+      used: c.total, budget, carry, moved, left: budget - c.total, alloc: m.alloc, eq: m.eq, inMonth: m.inMonth
     };
   }
 
@@ -604,20 +707,26 @@
     return Math.max(0, Math.min(due, e.target - savedAtStart));
   }
 
-  // Mois de la prochaine paie : ce mois-ci si le jour de paie n'est pas encore passé.
+  // Mois budgétaire de la prochaine paie (aujourd'hui compris).
   const nextPayMonth = () => {
-    const cm = currentMonth();
-    return dayOf(clock.today()) <= clampDay(state.salaryDay, cm) ? cm : shiftMonth(cm, 1);
+    const today = clock.today();
+    const m = monthOf(today);
+    let pay = isoFor(m, clampDay(state.salaryDay, m));
+    if (pay < today) pay = isoFor(shiftMonth(m, 1), clampDay(state.salaryDay, shiftMonth(m, 1)));
+    return budgetKey(pay);
   };
 
   function derive(key = currentMonth()) {
     const today = clock.today();
-    const cm = monthOf(today);
+    const cm = currentMonth();
     const isCurrent = key === cm;
-    const ms = firstOf(key);
-    const me = lastOf(key);
+    const ms = cycleStart(key);
+    const me = cycleEnd(key);
 
-    let income = state.salary;
+    // Report de la clôture du mois précédent : restes remis au budget, reste à vivre non utilisé, ou déficit.
+    const prevClose = state.closings.find((c) => c.key === shiftMonth(key, -1));
+    const carried = prevClose ? closingCarry(prevClose) : 0;
+    let income = state.salary * payDates(key).length + carried;
     let extraIncome = 0;
     let charges = 0;
     let orphan = 0;
@@ -635,7 +744,7 @@
         extraIncome += t.amount;
         if (future) incomeUpcoming += t.amount;
       } else if (t.type === 'deposit') {
-        deposits += t.amount;
+        if (t.src !== 'close') deposits += t.amount;
       } else {
         if (future) upcoming += t.amount;
         else spentToDate += t.amount;
@@ -674,33 +783,38 @@
     const allocated = charges + envAlloc + projectsMonthly + orphan + deposits;
     return {
       key, isCurrent, isFuture: key > cm, isPast: key < cm,
-      income, salary: state.salary, extraIncome, incomeUpcoming,
+      income, salary: state.salary, extraIncome, incomeUpcoming, carried,
       charges, spend, envAlloc, remaining, projectsMonthly, deposits, orphan,
       spentToDate, upcoming, plannedItems, allocated, free: income - allocated
     };
   }
 
+  // Trésorerie jour par jour sur un mois budgétaire. `day` est la position dans le mois (1 = premier jour du cycle).
   function cashflow(key, depth = 0) {
     const d = derive(key);
-    const n = daysInMonth(key);
+    const ms = cycleStart(key);
+    const me = cycleEnd(key);
+    const n = daysBetween(ms, me) + 1;
+    const pos = (iso) => daysBetween(ms, iso) + 1;
     const today = clock.today();
-    const cm = monthOf(today);
-    const t = key === cm ? dayOf(today) : key < cm ? n : 0;
+    const cm = currentMonth();
+    const t = key === cm ? pos(today) : key < cm ? n : 0;
     const inc = new Array(n + 1).fill(0);
     const out = new Array(n + 1).fill(0);
     const spentDay = new Array(n + 1).fill(0);
     const events = Array.from({ length: n + 1 }, () => []);
-    const sd = clampDay(state.salaryDay, key);
-    const ms = firstOf(key);
-    const me = lastOf(key);
+    const pays = payDates(key);
+    const sd = pays.length ? pos(pays[0]) : 1;
 
     if (state.salary > 0) {
-      inc[sd] += state.salary;
-      events[sd].push({ label: 'Salaire', amount: state.salary, type: 'income', planned: sd > t });
+      for (const p of pays) {
+        inc[pos(p)] += state.salary;
+        events[pos(p)].push({ label: 'Salaire', amount: state.salary, type: 'income', planned: pos(p) > t });
+      }
     }
     for (const tx of state.transactions) {
       if (tx.date < ms || tx.date > me) continue;
-      const day = dayOf(tx.date);
+      const day = pos(tx.date);
       const planned = tx.date > today;
       if (tx.type === 'income') {
         inc[day] += tx.amount;
@@ -719,7 +833,7 @@
     }
     for (const r of state.recurring) {
       for (const date of pendingOcc(r, ms, me)) {
-        const day = dayOf(date);
+        const day = pos(date);
         if (r.type === 'income') {
           inc[day] += r.amount;
           events[day].push({ label: r.label, amount: r.amount, type: 'income', planned: true, ruleId: r.id });
@@ -751,7 +865,7 @@
     let max = -Infinity;
     for (let day = 1; day <= n; day++) {
       balance += inc[day] - out[day] - (day > t ? perDay : 0);
-      days.push({ day, balance, actual: day <= t, events: events[day], spent: spentDay[day] });
+      days.push({ day, date: addDays(ms, day - 1), balance, actual: day <= t, events: events[day], spent: spentDay[day] });
       if (day >= from && balance < min.value) min = { day, value: balance };
       if (balance > max) max = balance;
     }
@@ -765,13 +879,13 @@
       const d = derive(key);
       const planned = [];
       for (const t of state.transactions) {
-        if (t.recId || !t.date.startsWith(key) || t.date <= clock.today()) continue;
+        if (t.recId || !inCycle(t.date, key) || t.date <= clock.today()) continue;
         if (t.type === 'expense') planned.push({ label: t.note || (findEnv(t.envId) || {}).name || 'Dépense', amount: -t.amount, date: t.date });
         if (t.type === 'income') planned.push({ label: t.note || 'Revenu', amount: t.amount, date: t.date });
       }
       for (const r of state.recurring) {
         if (MONTH_STEPS[r.freq] && MONTH_STEPS[r.freq] > 1) {
-          for (const date of pendingOcc(r, firstOf(key), lastOf(key))) {
+          for (const date of pendingOcc(r, cycleStart(key), cycleEnd(key))) {
             planned.push({ label: r.label, amount: r.type === 'income' ? r.amount : -r.amount, date, rec: true });
           }
         }
@@ -860,20 +974,26 @@
 
     const cash = cashflow(d.key);
     if (cash.openingKnown && cash.min.value < 0) {
-      push('bad', 'triangle-alert', 'Découvert probable', `Le ${shortDate(isoFor(d.key, cash.min.day))}, ton solde prévu descend à ${money(cash.min.value)}.`, 'agenda');
+      push('bad', 'triangle-alert', 'Découvert probable', `Le ${shortDate(cash.days[cash.min.day - 1].date)}, ton solde prévu descend à ${money(cash.min.value)}.`, 'agenda');
     }
 
-    const over = d.spend.filter((r) => r.used > r.env.max).sort((a, b) => (b.used - b.env.max) - (a.used - a.env.max));
+    const pending = state.prefs.closing.auto ? [] : pendingClosings();
+    if (pending.length && d.isCurrent) {
+      push('warn', 'calendar-check', `Clôture ${ofMonth(pending[0])} à faire`, 'Choisis quoi faire de ce qui reste : reporter, remettre au budget ou épargner. Touche pour commencer.', null, 'close');
+    }
+
+    const over = d.spend.filter((r) => r.left < 0).sort((a, b) => a.left - b.left);
     for (const r of over.slice(0, 2)) {
-      push('bad', 'circle-alert', `« ${r.env.name} » est dépassée`, `+${money(r.used - r.env.max)} au-dessus du budget ${PERIODS[r.env.period].the}, pris sur ton reste à vivre.`);
+      const movable = d.isCurrent && r.env.period !== 'week' && r.env.period !== '2weeks';
+      push('bad', 'circle-alert', `« ${r.env.name} » est dépassée`, `+${money(-r.left)} au-dessus du budget ${PERIODS[r.env.period].the}, pris sur ton reste à vivre.${movable ? ' Touche pour le couvrir avec une autre enveloppe.' : ''}`, null, movable ? `cover:${r.env.id}` : null);
     }
 
     const near = d.spend
-      .filter((r) => r.used <= r.env.max && r.used / r.env.max >= 0.85 && r.left > 0 && daysBetween(today, r.window.end) > 2)
-      .sort((a, b) => b.used / b.env.max - a.used / a.env.max);
+      .filter((r) => r.left > 0 && r.budget > 0 && r.used / r.budget >= 0.85 && daysBetween(today, r.window.end) > 2)
+      .sort((a, b) => b.used / b.budget - a.used / a.budget);
     for (const r of near.slice(0, 2)) {
       const days = daysBetween(today, r.window.end) + 1;
-      push('warn', 'circle-alert', `« ${r.env.name} » à ${Math.round((r.used / r.env.max) * 100)} %`, `Il reste ${money(r.left)} pour ${days} jours.`);
+      push('warn', 'circle-alert', `« ${r.env.name} » à ${Math.round((r.used / r.budget) * 100)} %`, `Il reste ${money(r.left)} pour ${days} jours.`);
     }
 
     const soon = upcomingEvents(3).filter((e) => e.amount < 0 && e.freq !== 'day');
@@ -905,6 +1025,165 @@
       return list;
     }
     return top;
+  }
+
+  // Ce que la clôture d'un mois reporte sur le suivant (positif : argent en plus ; négatif : déficit à couvrir).
+  function closingCarry(c) {
+    const lines = c.lines.reduce((s, l) => s + (l.action === 'budget' && l.left > 0 ? l.left : 0), 0);
+    const free = c.free > 0 ? (c.freeAction === 'budget' ? c.free : 0) : c.free;
+    return lines + free;
+  }
+
+  // Enveloppes concernées par la clôture d'un mois : celles dont la période se termine avec lui.
+  const closableRows = (key) => derive(key).spend.filter((r) => r.env.period !== 'week' && r.env.period !== '2weeks' && r.window.end === cycleEnd(key));
+
+  function pendingClosings() {
+    const cm = currentMonth();
+    const out = [];
+    if (!state.lastClosed) return out;
+    for (let k = shiftMonth(state.lastClosed, 1); k < cm && out.length < 36; k = shiftMonth(k, 1)) out.push(k);
+    return out;
+  }
+
+  const safetyProject = () => state.envelopes.find((e) => e.kind === 'project' && e.safety);
+
+  // Matelas de sécurité : projet spécial, créé une seule fois (si on le supprime, il ne revient pas).
+  function ensureSafety() {
+    if (state.prefs.safetyCreated || !state.prefs.onboarded) return null;
+    state.prefs.safetyCreated = true;
+    const same = state.envelopes.find((e) => e.kind === 'project' && normName(e.name) === normName('Matelas de sécurité'));
+    if (same) {
+      same.safety = true;
+      return same;
+    }
+    const env = {
+      id: uid(), kind: 'project', name: 'Matelas de sécurité', target: Math.max(100000, state.salary * 3), saved: 0, monthly: 0,
+      mode: 'plan', deadline: null, startMonth: null, safety: true, createdAt: clock.now()
+    };
+    state.envelopes.push(env);
+    return env;
+  }
+
+  // Choix par défaut pour une clôture, d'après les préférences mémorisées.
+  function closingDefaults(key) {
+    const pref = state.prefs.closing;
+    const proj = findEnv(pref.projectId) || safetyProject() || null;
+    const lines = {};
+    for (const r of closableRows(key)) {
+      const action = pref.env === 'project' && !proj ? 'keep' : pref.env;
+      lines[r.env.id] = { action, projectId: action === 'project' ? proj.id : null };
+    }
+    const freeAction = pref.free === 'project' && proj ? 'project' : 'budget';
+    return { lines, freeAction, freeProjectId: freeAction === 'project' ? proj.id : null };
+  }
+
+  // Clôture d'un mois budgétaire : instantané figé, destination des restes, déficit reporté.
+  function closeMonth(key, choice = closingDefaults(key)) {
+    if (state.closings.some((c) => c.key === key)) return fail('Ce mois est déjà clôturé.');
+    if (key >= currentMonth()) return fail('Ce mois n\'est pas encore terminé.');
+    const d = derive(key);
+    const rows = closableRows(key);
+    const nextStart = cycleStart(shiftMonth(key, 1));
+    const deposits = [];
+    const deposit = (projectId, amount, note) => {
+      const p = findEnv(projectId);
+      if (!p || p.kind !== 'project' || amount <= 0) return 0;
+      const room = p.safety ? amount : Math.max(0, p.target - p.saved);
+      const put = Math.min(amount, room);
+      if (put <= 0) return 0;
+      const tx = { id: uid(), type: 'deposit', envId: p.id, amount: put, note: cleanNote(note), date: nextStart, ts: clock.now(), src: 'close', closeKey: key };
+      state.transactions.push(tx);
+      p.saved += put;
+      deposits.push(tx);
+      return put;
+    };
+    const lines = rows.map((r) => {
+      const pick = (choice.lines && choice.lines[r.env.id]) || { action: 'keep' };
+      const line = { envId: r.env.id, name: r.env.name, left: r.left, action: CLOSE_ACTIONS.includes(pick.action) ? pick.action : 'keep', projectId: null };
+      if (line.action === 'project' && r.left > 0) {
+        const put = deposit(pick.projectId, r.left, `Reste de ${r.env.name}`);
+        line.projectId = pick.projectId;
+        if (put < r.left) line.action = 'budget';
+        line.left = r.left;
+      } else if (line.action === 'project') {
+        line.action = 'keep';
+      }
+      return line;
+    });
+    let freeAction = choice.freeAction === 'project' ? 'project' : 'budget';
+    let freeProjectId = null;
+    if (freeAction === 'project' && d.free > 0) {
+      const put = deposit(choice.freeProjectId, d.free, `Reste à vivre de ${monthName(key).toLowerCase()}`);
+      if (put === d.free) freeProjectId = choice.freeProjectId;
+      else freeAction = 'budget';
+    }
+    const spentAll = state.transactions.filter((t) => t.type === 'expense' && inCycle(t.date, key)).reduce((s, t) => s + t.amount, 0);
+    const snapshot = {
+      key, start: cycleStart(key), end: cycleEnd(key), income: d.income, carried: d.carried, charges: d.charges,
+      envAlloc: d.envAlloc, projects: d.projectsMonthly + d.deposits, orphan: d.orphan, free: d.free, spent: spentAll,
+      envs: d.spend.map((r) => ({ id: r.env.id, name: r.env.name, period: r.env.period, budget: r.budget, spent: r.used, left: r.left, alloc: r.alloc })),
+      saved: state.envelopes.filter((e) => e.kind === 'project').map((e) => ({ id: e.id, name: e.name, saved: e.saved }))
+    };
+    const closing = { key, at: clock.now(), lines, free: d.free, freeAction, freeProjectId, snapshot };
+    state.closings.push(closing);
+    state.closings.sort((a, b) => (a.key < b.key ? -1 : 1));
+    state.lastClosed = maxMonth(state.lastClosed || key, key);
+    return ok({ closing, deposits });
+  }
+
+  // Annuler une clôture (bouton « Annuler ») : retire les versements créés et l'instantané.
+  function reopenMonth(key) {
+    const i = state.closings.findIndex((c) => c.key === key);
+    if (i === -1) return fail('Mois non clôturé.');
+    state.closings.splice(i, 1);
+    state.transactions = state.transactions.filter((t) => {
+      if (t.src !== 'close' || t.closeKey !== key) return true;
+      const p = findEnv(t.envId);
+      if (p) p.saved = Math.max(0, p.saved - t.amount);
+      return false;
+    });
+    state.lastClosed = shiftMonth(key, -1);
+    return ok();
+  }
+
+  // Déplacer de l'argent entre enveloppes (ou depuis / vers le reste à vivre) pour un mois budgétaire.
+  function moveMoney({ from, to, amount, key = currentMonth() }) {
+    if (amount === null || !(amount > 0)) return fail('Indique un montant valide, supérieur à 0.');
+    if (from === to) return fail('Choisis deux enveloppes différentes.');
+    const ok1 = (v) => v === 'free' || Boolean(spendEnv(v));
+    if (!ok1(from) || !ok1(to)) return fail('Enveloppe introuvable.');
+    if ([from, to].some((v) => v !== 'free' && (spendEnv(v).period === 'week' || spendEnv(v).period === '2weeks'))) {
+      return fail('Les enveloppes à la semaine se remettent à zéro chaque semaine : choisis une enveloppe au mois ou plus.');
+    }
+    if (from === 'free') {
+      const free = derive(key).free;
+      if (amount > free) return fail(free <= 0 ? 'Ton reste à vivre est déjà entièrement réparti.' : `Ton reste à vivre ne permet que ${money(free)}.`);
+    } else {
+      const left = envRow(spendEnv(from), key).left;
+      if (amount > left) return fail(left <= 0 ? `« ${spendEnv(from).name} » est déjà vide.` : `Il ne reste que ${money(left)} dans « ${spendEnv(from).name} ».`);
+    }
+    const move = { id: uid(), key, date: key === currentMonth() ? clock.today() : cycleStart(key), from, to, amount, ts: clock.now() };
+    state.moves.push(move);
+    commit();
+    return ok(move);
+  }
+
+  function deleteMove(id) {
+    const i = state.moves.findIndex((m) => m.id === id);
+    if (i === -1) return fail('Déplacement introuvable.');
+    const [move] = state.moves.splice(i, 1);
+    commit();
+    return ok(move);
+  }
+
+  // Remettre toutes les enveloppes à zéro d'un coup (les dépenses restent au journal).
+  function resetAllEnvelopes() {
+    const before = state.envelopes.filter((e) => e.kind === 'spend').map((e) => [e.id, e.reset]);
+    if (!before.length) return fail('Aucune enveloppe à remettre à zéro.');
+    const stamp = { date: clock.today(), ts: clock.now() + 1 };
+    for (const e of state.envelopes) if (e.kind === 'spend') e.reset = { ...stamp };
+    commit();
+    return ok(before);
   }
 
   function runRollover() {
@@ -1017,7 +1296,9 @@
     state.transactions.forEach((t) => { if (t.envId === id) t.envId = null; });
     state.recurring.forEach((r) => { if (r.envId === id) r.envId = null; });
     state.rules = state.rules.filter((r) => r.envId !== id);
+    state.moves = state.moves.filter((m) => m.from !== id && m.to !== id);
     if (state.prefs.lastEnvId === id) state.prefs.lastEnvId = null;
+    if (state.prefs.closing.projectId === id) state.prefs.closing.projectId = null;
     const reinjected = derive().free - before;
     commit();
     return ok({ env, reinjected });
@@ -1041,7 +1322,7 @@
     const rule = {
       id: uid(), type: input.type, label: check.data, amount: input.amount, freq: input.freq,
       start: input.start, end: input.end || null, envId: input.type === 'expense' ? input.envId || null : null,
-      postedUntil: initialPostedUntil(input.start)
+      postedUntil: addDays(maxISO(input.start, cycleStart(currentMonth())), -1)
     };
     state.recurring.push(rule);
     const posted = postRecurring();
@@ -1087,11 +1368,21 @@
     return ok();
   }
 
-  function setSettings({ salaryDay, openingBalance }) {
+  function setSettings({ salaryDay, openingBalance, cycle, autoClose }) {
     if (!salaryDay) return fail('Indique un jour de paie entre 1 et 31.');
     if (openingBalance === undefined) return fail('Indique un solde valide, ou laisse le champ vide.');
+    const before = `${state.prefs.cycle}|${state.salaryDay}`;
     state.salaryDay = salaryDay;
     state.openingBalance = openingBalance;
+    if (cycle === 'pay' || cycle === 'calendar') state.prefs.cycle = cycle;
+    if (autoClose !== undefined) state.prefs.closing.auto = Boolean(autoClose);
+    // Changer de cycle décale les mois : on repart du mois en cours, sans clôture ni versement rétroactif.
+    if (before !== `${state.prefs.cycle}|${state.salaryDay}`) {
+      const cm = currentMonth();
+      state.lastClosed = shiftMonth(cm, -1);
+      if (state.lastRollover < cm) state.lastRollover = cm;
+      Object.assign(ui, { journalMonth: null, reportMonth: null, agendaMonth: null, agendaDay: null });
+    }
     commit();
     return ok();
   }
@@ -1106,7 +1397,7 @@
       if (!env || env.kind !== 'project') return fail('Choisis le projet à alimenter.');
       const already = env.saved - (prev && prev.type === 'deposit' && prev.envId === env.id ? prev.amount : 0);
       const room = env.target - already;
-      if (t.amount > room) return fail(room <= 0 ? 'Cet objectif est déjà atteint.' : `Il ne manque que ${money(room)} pour atteindre l'objectif.`);
+      if (!env.safety && t.amount > room) return fail(room <= 0 ? 'Cet objectif est déjà atteint.' : `Il ne manque que ${money(room)} pour atteindre l'objectif.`);
     } else if (t.type !== 'income') {
       return fail('Type inconnu.');
     }
@@ -1117,7 +1408,7 @@
     const t = { id: uid(), type, envId: type === 'income' ? null : envId || null, amount, note: cleanNote(note), date, ts: clock.now() };
     const check = validateTx(t, null);
     if (!check.ok) return check;
-    if (type === 'deposit' && covers) t.covers = monthOf(date);
+    if (type === 'deposit' && covers) t.covers = budgetKey(date);
     const dt = cleanDetail(detail);
     if (dt) t.detail = dt;
     if (ref) t.ref = ref;
@@ -1141,7 +1432,7 @@
       if (env) env.saved = Math.max(0, env.saved - tx.amount);
     }
     Object.assign(tx, { type: next.type, envId: next.envId || null, amount: next.amount, date: next.date, note: cleanNote(next.note) });
-    if (tx.type === 'deposit' && next.covers) tx.covers = monthOf(tx.date);
+    if (tx.type === 'deposit' && next.covers) tx.covers = budgetKey(tx.date);
     else delete tx.covers;
     const dt = cleanDetail(next.detail);
     if (dt) tx.detail = dt;
@@ -1668,7 +1959,10 @@
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
-    'imp-list', 'imp-confirm', 'imp-error', 'imp-cancel', 'toasts'
+    'imp-list', 'imp-confirm', 'imp-error', 'imp-cancel', 'toasts', 'set-cycle', 'set-cycle-pay-text', 'set-auto-close',
+    'menu-reset-all', 'env-move', 'order-list', 'r-mode', 'r-month', 'r-history', 'dlg-close', 'close-form', 'close-title',
+    'close-sub', 'close-tiles', 'close-all', 'close-list', 'close-hint', 'close-auto', 'close-error', 'close-later',
+    'dlg-move', 'move-form', 'move-amount', 'move-from', 'move-to', 'move-hint', 'move-error'
   ].map((id) => [id.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), byId(id)]));
 
   const h = (tag, props, ...kids) => {
@@ -1722,7 +2016,7 @@
 
   const signed = (cents) => `${cents < 0 ? '−' : '+'}${money(Math.abs(cents))}`;
 
-  const ui = { tab: 'home', journalMonth: null, journalFilter: 'all', reportMonth: null, agendaMonth: null, agendaDay: null, lastScan: null };
+  const ui = { tab: 'home', journalMonth: null, journalFilter: 'all', reportMonth: null, agendaMonth: null, agendaDay: null, lastScan: null, reportMode: 'month', historyRange: 3, historyOpen: null };
   const TABS = ['home', 'journal', 'agenda', 'report'];
   const TAB_HASH = { home: '', journal: '#journal', agenda: '#agenda', report: '#bilan' };
 
@@ -1823,6 +2117,7 @@
         ? `Dépassement de ${money(-d.free)} sur tes revenus`
         : `${money(d.allocated)} déjà prévus sur ${money(d.income)}`;
 
+    if (d.income > 0 && d.carried) els.remainingSub.textContent += ` · report du mois dernier : ${signed(d.carried)}`;
     const fracs = p.base > 0 ? [p.charges, p.spend, p.goal, p.free].map((v) => v / p.base) : [0, 0, 0, 0];
     const gap = fracs.filter((f) => f > 0).length > 1 ? 3 : 0;
     let offset = 0;
@@ -1930,20 +2225,32 @@
   const createSpendCard = (row) => cardShell('spend', row.id, 'wallet');
   const createProjectCard = (env) => cardShell('project', env.id, 'target');
 
+  // « Bien tenu » : on dépense moins vite que le temps qui passe. Une enveloppe est un plafond, pas un objectif.
+  function wellKept(row, today = clock.today()) {
+    const w = row.window;
+    if (today < w.start || today > w.end || row.budget <= 0 || row.used >= row.budget) return false;
+    const elapsed = (daysBetween(w.start, today) + 1) / (daysBetween(w.start, w.end) + 1);
+    return elapsed >= 0.33 && row.used / row.budget <= elapsed;
+  }
+
   function updateSpendCard(el, row) {
     const r = el._r;
-    const { env, spent, planned, used, left, window: w } = row;
-    const ratio = env.max > 0 ? used / env.max : 0;
-    const pct = (v) => Math.round(Math.min(1, env.max > 0 ? v / env.max : 0) * 100);
-    el.dataset.state = used > env.max ? 'over' : used === env.max ? 'empty' : ratio >= 0.85 ? 'tight' : 'safe';
+    const { env, spent, planned, used, left, budget, window: w } = row;
+    const ratio = budget > 0 ? used / budget : used > 0 ? 2 : 0;
+    const pct = (v) => Math.round(Math.min(1, budget > 0 ? v / budget : 0) * 100);
+    el.dataset.state = used > budget ? 'over' : used === budget ? 'empty' : ratio >= 0.85 ? 'tight' : 'safe';
     r.name.textContent = env.name;
     r.name.title = env.name;
     const per = PERIODS[env.period];
-    r.kind.textContent = env.period === 'month' ? 'Par mois' : `${capitalize(per.per)} · ≈ ${moneyRound(row.eq)}/mois`;
-    r.badge.hidden = true;
+    const extra = [row.carry > 0 ? `+${money(row.carry)} reportés` : null, row.moved ? `${row.moved > 0 ? '+' : '−'}${money(Math.abs(row.moved))} déplacés` : null].filter(Boolean).join(' · ');
+    r.kind.textContent = `${env.period === 'month' ? 'Par mois' : `${capitalize(per.per)} · ≈ ${moneyRound(row.eq)}/mois`}${extra ? ` · ${extra}` : ''}`;
+    const kept = wellKept(row);
+    r.badge.hidden = !kept;
+    r.badge.textContent = 'Bien tenu';
+    r.badge.dataset.tone = 'ok';
     r.label.textContent = left < 0 ? 'Dépassement' : 'Disponible';
     setMoney(r.value, Math.abs(left));
-    r.total.textContent = `sur ${money(env.max)}`;
+    r.total.textContent = `sur ${money(budget)}`;
     r.fill.style.width = `${pct(spent)}%`;
     r.plan.style.width = `${pct(used)}%`;
     r.bar.setAttribute('aria-valuenow', String(Math.round(Math.min(1, ratio) * 100)));
@@ -2067,14 +2374,22 @@
       h('span', { class: 'tx-amount', text: `${t.type === 'expense' || t.type === 'deposit' ? '−' : '+'}${money(t.amount)}` }));
   }
 
+  function moveRow(m) {
+    const name = (v) => (v === 'free' ? 'Reste à vivre' : (findEnv(v) || {}).name || 'Enveloppe');
+    return h('button', { type: 'button', class: 'tx-row', dataset: { move: m.id, type: 'move' } },
+      h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon('arrow-left-right')),
+      h('span', { class: 'tx-body' }, h('strong', { text: `${name(m.from)} → ${name(m.to)}` }), h('small', { text: 'Déplacement d\'argent · touche pour annuler' })),
+      h('span', { class: 'tx-amount', text: `↔ ${money(m.amount)}` }));
+  }
+
   function renderJournal() {
     const cm = currentMonth();
     const key = ui.journalMonth || cm;
     ui.journalMonth = key;
-    els.jLabel.textContent = monthName(key);
+    els.jLabel.textContent = periodLabel(key);
     els.jNext.disabled = monthDiff(cm, key) >= 12;
 
-    const monthTxs = state.transactions.map((t, i) => ({ t, i })).filter((x) => x.t.date.startsWith(key));
+    const monthTxs = state.transactions.map((t, i) => ({ t, i })).filter((x) => inCycle(x.t.date, key));
     const envs = state.envelopes.filter((e) => e.kind === 'spend');
     if (ui.journalFilter.startsWith('env:') && !envs.some((e) => `env:${e.id}` === ui.journalFilter)) ui.journalFilter = 'all';
 
@@ -2085,7 +2400,8 @@
       h('option', { value: 'planned', text: 'Prévues' }),
       h('option', { value: 'orphan', text: 'Hors enveloppe' }),
       h('option', { value: 'income', text: 'Revenus' }),
-      h('option', { value: 'deposit', text: 'Versements projets' }));
+      h('option', { value: 'deposit', text: 'Versements projets' }),
+      h('option', { value: 'moves', text: 'Déplacements' }));
     els.jFilter.value = ui.journalFilter;
 
     const today = clock.today();
@@ -2097,9 +2413,13 @@
       if (f === 'orphan') return t.type === 'expense' && !t.envId && !t.recId;
       if (f === 'income') return t.type === 'income';
       if (f === 'deposit') return t.type === 'deposit';
+      if (f === 'moves') return t.type === 'move';
+      if (f.startsWith('env:') && t.type === 'move') return `env:${t.from}` === f || `env:${t.to}` === f;
       return t.type === 'expense' && `env:${t.envId}` === f;
     };
-    const rows = monthTxs.filter((x) => matches(x.t)).sort((a, b) => (a.t.date < b.t.date ? 1 : a.t.date > b.t.date ? -1 : b.t.ts - a.t.ts || b.i - a.i));
+    // Les déplacements d'argent apparaissent dans le journal comme une trace (ils ne sont pas des dépenses).
+    const moves = state.moves.filter((m) => m.key === key).map((m, i) => ({ t: { ...m, type: 'move' }, i: -1 - i }));
+    const rows = [...monthTxs, ...moves].filter((x) => matches(x.t)).sort((a, b) => (a.t.date < b.t.date ? 1 : a.t.date > b.t.date ? -1 : b.t.ts - a.t.ts || b.i - a.i));
 
     const spent = monthTxs.filter((x) => x.t.type === 'expense' && x.t.date <= today).reduce((s, x) => s + x.t.amount, 0);
     const planned = monthTxs.filter((x) => x.t.type === 'expense' && x.t.date > today).reduce((s, x) => s + x.t.amount, 0);
@@ -2123,7 +2443,7 @@
       const total = g.items.reduce((s, t) => s + (t.type === 'expense' ? t.amount : 0), 0);
       return h('section', { class: 'tx-group', dataset: { planned: String(g.date > today) } },
         h('header', { class: 'tx-group-head' }, h('span', { text: dayHeading(g.date) }), total > 0 ? h('span', { text: `−${money(total)}` }) : null),
-        h('div', { class: 'tx-rows' }, g.items.map(txRow)));
+        h('div', { class: 'tx-rows' }, g.items.map((t) => (t.type === 'move' ? moveRow(t) : txRow(t)))));
     }));
     els.jEmpty.hidden = rows.length > 0;
     flushIcons();
@@ -2150,7 +2470,7 @@
     const ticks = [...new Set([hi, 0, lo])];
     const grid = ticks.map((v) => `<line class="c-grid${v === 0 ? ' c-zero' : ''}" x1="${pl}" x2="${W - pr}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="c-label" x="${pl - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${short(v)}</text>`).join('');
     const xs = [...new Set([1, Math.ceil(cash.n * 0.25), Math.ceil(cash.n * 0.5), Math.ceil(cash.n * 0.75), cash.n])];
-    const xl = xs.map((day) => `<text class="c-label" x="${x(day).toFixed(1)}" y="${H - 8}" text-anchor="middle">${day}</text>`).join('');
+    const xl = xs.map((day) => `<text class="c-label" x="${x(day).toFixed(1)}" y="${H - 8}" text-anchor="middle">${dayOf(cash.days[day - 1].date)}</text>`).join('');
     const markers = new Map();
     for (const dd of cash.days) {
       for (const ev of dd.events) {
@@ -2185,19 +2505,19 @@
     const key = ui.agendaMonth || cm;
     ui.agendaMonth = key;
     const today = clock.today();
-    els.calLabel.textContent = monthName(key);
+    els.calLabel.textContent = periodLabel(key);
     els.aNext.disabled = monthDiff(cm, key) >= 24;
     els.aPrev.disabled = monthDiff(key, cm) >= 24;
 
     const cash = cashflow(key);
-    if (!ui.agendaDay || !ui.agendaDay.startsWith(key)) ui.agendaDay = key === cm ? today : firstOf(key);
+    if (!ui.agendaDay || !inCycle(ui.agendaDay, key)) ui.agendaDay = key === cm ? today : cycleStart(key);
 
     const maxSpent = Math.max(1, ...cash.days.map((dd) => dd.spent));
-    const first = (parseISO(firstOf(key)).getDay() + 6) % 7;
+    const first = (parseISO(cash.days[0].date).getDay() + 6) % 7;
     const cells = [];
     for (let i = 0; i < first; i++) cells.push(h('span', { class: 'cal-blank', 'aria-hidden': 'true' }));
     for (const dd of cash.days) {
-      const iso = isoFor(key, dd.day);
+      const iso = dd.date;
       const kinds = new Set();
       for (const ev of dd.events) {
         if (ev.planned) kinds.add(ev.type === 'income' ? 'income' : 'planned');
@@ -2212,13 +2532,13 @@
         dataset: { date: iso, heat: String(heat) },
         'aria-label': `${dayHeading(iso)}${dd.events.length ? `, ${dd.events.length} opération(s)` : ''}`
       },
-      h('span', { class: 'cal-num', text: String(dd.day) }),
+      h('span', { class: 'cal-num', text: dayOf(iso) === 1 && dd.day > 1 ? `1 ${monthShort(monthOf(iso)).toLowerCase()}` : String(dayOf(iso)) }),
       dd.spent > 0 ? h('small', { class: 'cal-spent', text: `−${Math.round(dd.spent / 100)}` }) : null,
       h('i', { class: 'cal-dots' }, ['spent', 'charge', 'income', 'planned'].filter((k) => kinds.has(k)).map((k) => h('b', { class: `dot-${k}` })))));
     }
     fill(els.calendar, cells);
 
-    const sel = cash.days[dayOf(ui.agendaDay) - 1];
+    const sel = cash.days[daysBetween(cash.days[0].date, ui.agendaDay)];
     const evs = [...sel.events].sort((a, b) => Number(a.planned) - Number(b.planned) || a.amount - b.amount);
     const out = evs.filter((e) => e.amount < 0).reduce((s, e) => s - e.amount, 0);
     fill(els.dayDetail,
@@ -2234,7 +2554,7 @@
         h('span', { class: 'day-event-main' }, h('strong', { text: ev.label }), h('small', { text: [ev.sub, ev.planned ? 'prévu' : null].filter(Boolean).join(' · ') })),
         h('b', { text: signed(ev.amount) }))))
         : h('p', { class: 'muted', text: 'Rien ce jour-là.' }),
-      cash.openingKnown || key === cm ? h('p', { class: 'muted small', text: `${cash.openingKnown ? 'Solde prévu' : 'Variation depuis le 1er'} en fin de journée : ${money(sel.balance)}` }) : null,
+      cash.openingKnown || key === cm ? h('p', { class: 'muted small', text: `${cash.openingKnown ? 'Solde prévu' : `Variation depuis le ${shortDate(cash.days[0].date)}`} en fin de journée : ${money(sel.balance)}` }) : null,
       h('button', { type: 'button', class: 'btn ghost block add-on-day', dataset: { date: ui.agendaDay } }, icon('calendar-plus'), ui.agendaDay > today ? 'Prévoir une dépense ce jour-là' : 'Ajouter une opération ce jour-là'));
 
     els.cashTitle.textContent = `Trésorerie · ${monthName(key)}`;
@@ -2242,11 +2562,12 @@
     const dip = cash.openingKnown && cash.min.value < 0;
     els.cashNote.dataset.tone = dip ? 'bad' : 'ok';
     els.cashNote.textContent = dip
-      ? `Attention : ton solde prévu descend à ${money(cash.min.value)} le ${shortDate(isoFor(key, cash.min.day))}.`
+      ? `Attention : ton solde prévu descend à ${money(cash.min.value)} le ${shortDate(cash.days[cash.min.day - 1].date)}.`
       : cash.openingKnown
         ? `Fin de mois prévue : ${money(cash.end)} si tu utilises tes enveloppes jusqu'au bout.`
         : `Sans solde de départ, la courbe montre la variation du mois (fin : ${signed(cash.end)}). Renseigne ton solde dans Réglages pour l'affiner.`;
 
+    renderOrder(key);
     renderForecast();
     renderRules();
     flushIcons();
@@ -2289,24 +2610,32 @@
     els.recEmpty.hidden = items.length > 0;
   }
 
+  // Dépensé dans un mois budgétaire jusqu'à son n-ième jour.
   function spentUpTo(key, day) {
+    const from = cycleStart(key);
+    const to = minISO(cycleEnd(key), addDays(from, day - 1));
     return state.transactions
-      .filter((t) => t.type === 'expense' && t.date.startsWith(key) && dayOf(t.date) <= day)
+      .filter((t) => t.type === 'expense' && t.date >= from && t.date <= to)
       .reduce((s, t) => s + t.amount, 0);
   }
 
   function renderReport() {
+    const history = ui.reportMode === 'history';
+    els.rMonth.hidden = history;
+    els.rHistory.hidden = !history;
+    setRadio(els.rMode, 'r-mode', history ? 'history' : 'month');
+    if (history) return renderHistory();
     const cm = currentMonth();
     const key = ui.reportMonth || cm;
     ui.reportMonth = key;
-    els.rLabel.textContent = monthName(key);
+    els.rLabel.textContent = periodLabel(key);
     els.rNext.disabled = key >= cm;
     const d = derive(key);
     const today = clock.today();
-    const lastDay = key === cm ? today : lastOf(key);
-    const txs = state.transactions.filter((t) => t.date.startsWith(key) && t.date <= lastDay);
+    const lastDay = key === cm ? today : cycleEnd(key);
+    const txs = state.transactions.filter((t) => inCycle(t.date, key) && t.date <= lastDay);
     const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-    const received = state.salary * (key < cm || dayOf(today) >= clampDay(state.salaryDay, key) ? 1 : 0) + txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const received = state.salary * payDates(key).filter((p) => p <= lastDay).length + txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const saved = d.projectsMonthly + d.deposits;
     const result = received - spent - saved;
 
@@ -2334,7 +2663,7 @@
 
     const daySpend = new Map();
     for (const t of txs) if (t.type === 'expense' && !t.recId) daySpend.set(t.date, (daySpend.get(t.date) || 0) + t.amount);
-    const elapsed = key === cm ? dayOf(today) : daysInMonth(key);
+    const elapsed = daysBetween(cycleStart(key), lastDay) + 1;
     const activeDays = daySpend.size;
     const wd = [0, 0, 0, 0, 0, 0, 0];
     for (const [date, v] of daySpend) wd[(parseISO(date).getDay() + 6) % 7] += v;
@@ -2358,7 +2687,7 @@
       notes.push(['trending-up', `« ${ranked[0].env.name} » est ton premier poste : ${Math.round((ranked[0].inMonth / spent) * 100)} % de tes dépenses.`]);
     }
     const prevKey = shiftMonth(key, -1);
-    const upTo = key === cm ? dayOf(today) : daysInMonth(key);
+    const upTo = elapsed;
     const prevSpent = spentUpTo(prevKey, upTo);
     if (prevSpent > 0 && spent > 0) {
       const delta = Math.round(((spent - prevSpent) / prevSpent) * 100);
@@ -2477,7 +2806,7 @@
     }
     const repeat = sheetRepeat();
     els.txEnvLabel.textContent = txUi.suggested && !txUi.envTouched && txUi.envId ? 'Enveloppe (suggérée)' : 'Enveloppe';
-    const key = monthOf(date);
+    const key = budgetKey(date);
     const rows = derive(key).spend;
     const chip = (envId, name, sub) => h('button', {
       type: 'button', class: `chip${txUi.suggested && !txUi.envTouched && (txUi.envId || '') === envId && envId ? ' is-suggested' : ''}`, role: 'radio',
@@ -2493,7 +2822,7 @@
     const env = findEnv(txUi.projectId);
     if (!env || env.kind !== 'project') return null;
     const date = sheetDate();
-    const key = monthOf(date);
+    const key = budgetKey(date);
     const amount = parseAmount(els.txAmount.value) || 0;
     const prev = txUi.txId ? state.transactions.find((t) => t.id === txUi.txId) : null;
     const own = prev && prev.type === 'deposit' && prev.envId === env.id && prev.covers === key ? prev.amount : 0;
@@ -2548,7 +2877,7 @@
     if (repeat !== 'once') {
       const f = FREQS[repeat];
       const eq = amount ? monthlyEq(amount, repeat) : 0;
-      const back = date <= today && !txUi.ruleId ? ` Les échéances depuis le ${shortDate(maxISO(date, firstOf(monthOf(today))))} sont ajoutées tout de suite.` : '';
+      const back = date <= today && !txUi.ruleId ? ` Les échéances depuis le ${shortDate(maxISO(date, cycleStart(currentMonth())))} sont ajoutées tout de suite.` : '';
       if (txUi.mode === 'income') {
         return setHint(els.txHint, amount
           ? `+${money(amount)} ${f.per} à partir du ${shortDate(date)}${until}, ajouté automatiquement (≈ ${moneyRound(eq)}/mois).${back}`
@@ -2561,16 +2890,16 @@
 
     if (txUi.mode === 'income') {
       return setHint(els.txHint, future
-        ? `Revenu prévu le ${shortDate(date)} : compté dans ${monthName(monthOf(date)).toLowerCase()}.`
+        ? `Revenu prévu le ${shortDate(date)} : compté dans ${monthName(budgetKey(date)).toLowerCase()}.`
         : "Ce revenu s'ajoute à ton reste à vivre du mois.");
     }
 
     const env = spendEnv(txUi.envId);
     if (future) {
-      return setHint(els.txHint, `Dépense prévue le ${shortDate(date)} : ${env ? `réservée dans « ${env.name} »` : `réservée sur ${monthName(monthOf(date)).toLowerCase()}`}. Elle apparaît dans l'agenda.`);
+      return setHint(els.txHint, `Dépense prévue le ${shortDate(date)} : ${env ? `réservée dans « ${env.name} »` : `réservée sur ${monthName(budgetKey(date)).toLowerCase()}`}. Elle apparaît dans l'agenda.`);
     }
     if (!env) return setHint(els.txHint, 'Sans enveloppe : le montant est pris directement sur ton reste à vivre.');
-    const row = envRow(env, monthOf(date));
+    const row = envRow(env, budgetKey(date));
     const prev = txUi.txId ? state.transactions.find((t) => t.id === txUi.txId) : null;
     const own = prev && prev.type === 'expense' && prev.envId === env.id && prev.date >= row.window.start && prev.date <= row.window.end ? prev.amount : 0;
     const base = row.left + own;
@@ -2856,7 +3185,7 @@
     else if (t.type === 'deposit') message = `${money(t.amount)} versés dans « ${env.name} ».`;
     else if (future) message = `Dépense de ${money(t.amount)} prévue le ${shortDate(t.date)}.`;
     else if (env) {
-      const row = envRow(env, monthOf(t.date));
+      const row = envRow(env, budgetKey(t.date));
       message = row.left >= 0 ? `−${money(t.amount)} · il reste ${money(row.left)} dans « ${env.name} ».` : `−${money(t.amount)} · « ${env.name} » est dépassée.`;
     } else message = `−${money(t.amount)} hors enveloppe.`;
     toast(message, { action: { label: 'Annuler', run: () => { if (deleteTransaction(t.id).ok) toast('Opération annulée.'); } } });
@@ -3119,18 +3448,314 @@
     if (res.ok) toast(res.data.reinjected > 0 ? `${money(res.data.reinjected)} retournent dans ton reste à vivre.` : 'Supprimé.');
   });
 
+  // ——— Clôture du mois ———
+  const closeUi = { key: null, choice: null };
+  const closeValue = (c) => (c.action === 'project' ? `project:${c.projectId}` : c.action);
+  const parseCloseValue = (v) => (v.startsWith('project:') ? { action: 'project', projectId: v.slice(8) } : { action: v === 'budget' ? 'budget' : 'keep', projectId: null });
+  const savingTargets = () => state.envelopes.filter((e) => e.kind === 'project' && (e.safety || !projectDone(e)))
+    .sort((a, b) => Number(Boolean(b.safety)) - Number(Boolean(a.safety)));
+
+  function openClosing(key = pendingClosings()[0]) {
+    if (!key) return;
+    closeUi.key = key;
+    closeUi.choice = closingDefaults(key);
+    const d = derive(key);
+    const pending = pendingClosings();
+    els.closeTitle.textContent = `Clôture ${ofMonth(key)}`;
+    els.closeSub.textContent = `${periodLabel(key)} est terminé${pending.length > 1 ? ` (encore ${pending.length - 1} ${plural(pending.length - 1, 'mois', 'mois')} après celui-ci)` : ''}. Que faire de ce qui reste ?`;
+    const spent = state.transactions.filter((t) => t.type === 'expense' && inCycle(t.date, key)).reduce((s, t) => s + t.amount, 0);
+    fill(els.closeTiles,
+      h('div', { class: 'tile' }, h('span', { text: 'Reçu' }), h('strong', { text: money(d.income) })),
+      h('div', { class: 'tile' }, h('span', { text: 'Dépensé' }), h('strong', { text: money(spent) })),
+      h('div', { class: 'tile', dataset: { negative: String(d.free < 0) } }, h('span', { text: d.free < 0 ? 'Déficit' : 'Non réparti' }), h('strong', { text: money(d.free) })));
+    setRadio(els.closeForm, 'close-all', state.prefs.closing.env);
+    els.closeAuto.checked = state.prefs.closing.auto;
+    hideError(els.closeError);
+    renderClosingList();
+    openDialog(els.dlgClose);
+  }
+
+  function renderClosingList() {
+    const key = closeUi.key;
+    const next = monthName(shiftMonth(key, 1)).toLowerCase();
+    const d = derive(key);
+    const targets = savingTargets();
+    const select = (id, value, withKeep, label) => h('select', { class: 'close-select', dataset: { line: id }, 'aria-label': label },
+      withKeep ? h('option', { value: 'keep', text: 'Reporter dans l\'enveloppe' }) : null,
+      h('option', { value: 'budget', text: `Remettre au budget de ${next}` }),
+      targets.map((p) => h('option', { value: `project:${p.id}`, text: `Verser sur « ${p.name} »` })));
+    const rows = closableRows(key).map((r) => {
+      const c = closeUi.choice.lines[r.env.id];
+      const tone = r.left >= 0 ? 'ok' : 'bad';
+      const status = r.left > 0 ? `${money(r.left)} restants` : r.left === 0 ? 'Tout juste' : `Dépassée de ${money(-r.left)}`;
+      return h('div', { class: 'close-row', dataset: { tone } },
+        h('div', { class: 'close-main' },
+          h('strong', {}, r.env.name, r.left >= 0 ? h('em', { class: 'badge', dataset: { tone: 'ok' }, text: 'Bien tenu' }) : null),
+          h('small', { text: `${money(r.used)} dépensés sur ${money(r.budget)} · ${status}` })),
+        r.left > 0
+          ? select(r.env.id, closeValue(c), true, `Que faire du reste de ${r.env.name}`)
+          : h('span', { class: 'close-note', text: r.left < 0 ? 'Déjà pris sur ton reste à vivre' : 'Rien à reporter' }));
+    });
+    let freeRow = null;
+    if (d.free > 0) {
+      freeRow = h('div', { class: 'close-row', dataset: { tone: 'ok' } },
+        h('div', { class: 'close-main' }, h('strong', { text: 'Reste à vivre non réparti' }), h('small', { text: `${money(d.free)} jamais attribués à une enveloppe` })),
+        select('__free__', closeUi.choice.freeAction === 'project' ? `project:${closeUi.choice.freeProjectId}` : 'budget', false, 'Que faire du reste à vivre'));
+    } else if (d.free < 0) {
+      freeRow = h('div', { class: 'close-row', dataset: { tone: 'bad' } },
+        h('div', { class: 'close-main' }, h('strong', { text: 'Déficit du mois' }), h('small', { text: `${money(-d.free)} retirés du reste à vivre de ${next}.` })));
+    }
+    fill(els.closeList, rows.length || freeRow ? [rows, freeRow] : h('p', { class: 'muted', text: 'Aucune enveloppe au mois à clôturer.' }));
+    els.closeList.querySelectorAll('select').forEach((s) => {
+      s.value = s.dataset.line === '__free__'
+        ? closeUi.choice.freeAction === 'project' ? `project:${closeUi.choice.freeProjectId}` : 'budget'
+        : closeValue(closeUi.choice.lines[s.dataset.line]);
+    });
+    updateClosingHint();
+    flushIcons();
+  }
+
+  function updateClosingHint() {
+    const key = closeUi.key;
+    const next = monthName(shiftMonth(key, 1)).toLowerCase();
+    let keep = 0;
+    let budget = 0;
+    let saved = 0;
+    for (const r of closableRows(key)) {
+      if (r.left <= 0) continue;
+      const c = closeUi.choice.lines[r.env.id];
+      if (c.action === 'keep') keep += r.left;
+      else if (c.action === 'budget') budget += r.left;
+      else saved += r.left;
+    }
+    const free = derive(key).free;
+    if (free > 0 && closeUi.choice.freeAction === 'project') saved += free;
+    else budget += free;
+    const bits = [keep ? `${money(keep)} restent dans tes enveloppes` : null, budget > 0 ? `+${money(budget)} sur ton reste à vivre` : budget < 0 ? `${money(budget)} sur ton reste à vivre` : null, saved ? `${money(saved)} épargnés` : null].filter(Boolean);
+    setHint(els.closeHint, bits.length ? `En ${next} : ${bits.join(', ')}.` : 'Rien à reporter : le mois est clôturé tel quel.', budget < 0 ? 'bad' : 'ok');
+  }
+
+  els.closeAll.addEventListener('change', () => {
+    const action = checkedValue(els.closeForm, 'close-all');
+    const target = savingTargets()[0];
+    for (const id of Object.keys(closeUi.choice.lines)) {
+      closeUi.choice.lines[id] = action === 'project' && target ? { action, projectId: target.id } : { action: action === 'project' ? 'budget' : action, projectId: null };
+    }
+    if (action === 'project' && target) Object.assign(closeUi.choice, { freeAction: 'project', freeProjectId: target.id });
+    else Object.assign(closeUi.choice, { freeAction: 'budget', freeProjectId: null });
+    renderClosingList();
+  });
+
+  els.closeList.addEventListener('change', (e) => {
+    const s = e.target.closest('select');
+    if (!s) return;
+    const v = parseCloseValue(s.value);
+    if (s.dataset.line === '__free__') Object.assign(closeUi.choice, { freeAction: v.action === 'project' ? 'project' : 'budget', freeProjectId: v.projectId });
+    else closeUi.choice.lines[s.dataset.line] = v;
+    updateClosingHint();
+  });
+
+  els.closeLater.addEventListener('click', () => closeDialog(els.dlgClose));
+
+  els.closeForm.addEventListener('submit', guard(() => {
+    const key = closeUi.key;
+    const res = closeMonth(key, closeUi.choice);
+    if (!res.ok) return showError(els.closeError, res.error);
+    const global = checkedValue(els.closeForm, 'close-all');
+    Object.assign(state.prefs.closing, {
+      env: CLOSE_ACTIONS.includes(global) ? global : state.prefs.closing.env,
+      free: closeUi.choice.freeAction,
+      projectId: closeUi.choice.freeProjectId || Object.values(closeUi.choice.lines).map((l) => l.projectId).find(Boolean) || state.prefs.closing.projectId,
+      auto: els.closeAuto.checked
+    });
+    commit();
+    closeDialog(els.dlgClose);
+    toast(`${capitalize(monthName(key).toLowerCase())} est clôturé : l'instantané est dans Bilan › Historique.`, {
+      action: { label: 'Annuler', run: () => { reopenMonth(key); commit(); toast('Clôture annulée.'); } }
+    });
+    if (pendingClosings().length && !state.prefs.closing.auto) setTimeout(() => openClosing(), 450);
+    else if (pendingClosings().length) {
+      for (const k of pendingClosings()) closeMonth(k);
+      commit();
+    }
+  }));
+
+  // ——— Déplacer de l'argent ———
+  function moveOptions(select, value) {
+    const key = currentMonth();
+    const d = derive(key);
+    fill(select,
+      h('option', { value: 'free', text: `Reste à vivre (${money(d.free)})` }),
+      d.spend.filter((r) => r.env.period !== 'week' && r.env.period !== '2weeks')
+        .map((r) => h('option', { value: r.env.id, text: `${r.env.name} (${r.left < 0 ? '−' : ''}${money(Math.abs(r.left))})` })));
+    select.value = value;
+  }
+
+  function openMove({ from = null, to = null } = {}) {
+    const envs = derive().spend.filter((r) => r.env.period !== 'week' && r.env.period !== '2weeks');
+    if (!envs.length) return toast('Crée d\'abord une enveloppe au mois (ou plus) pour y déplacer de l\'argent.', 'error');
+    const target = to || (from ? 'free' : envs[0].env.id);
+    const source = from || (to ? (envs.filter((r) => r.env.id !== to && r.left > 0).sort((a, b) => b.left - a.left)[0] || { env: { id: 'free' } }).env.id : 'free');
+    moveOptions(els.moveFrom, source);
+    moveOptions(els.moveTo, target);
+    const toRow = to && envs.find((r) => r.env.id === to);
+    els.moveAmount.value = toRow && toRow.left < 0 ? toInputValue(-toRow.left) : '';
+    hideError(els.moveError);
+    updateMoveHint();
+    closeDialog(els.dlgEnv);
+    openDialog(els.dlgMove);
+    requestAnimationFrame(() => els.moveAmount.focus());
+  }
+
+  function updateMoveHint() {
+    const amount = parseAmount(els.moveAmount.value);
+    const name = (v) => (v === 'free' ? 'ton reste à vivre' : `« ${(spendEnv(v) || {}).name} »`);
+    if (els.moveFrom.value === els.moveTo.value) return setHint(els.moveHint, 'Choisis deux endroits différents.', 'bad');
+    if (!amount) return setHint(els.moveHint, `De ${name(els.moveFrom.value)} vers ${name(els.moveTo.value)}, pour ${monthName(currentMonth()).toLowerCase()}.`);
+    return setHint(els.moveHint, `${money(amount)} passent de ${name(els.moveFrom.value)} à ${name(els.moveTo.value)}.`, 'ok');
+  }
+
+  [els.moveAmount, els.moveFrom, els.moveTo].forEach((el) => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+    hideError(els.moveError);
+    updateMoveHint();
+  }));
+
+  els.moveForm.addEventListener('submit', guard(() => {
+    const res = moveMoney({ from: els.moveFrom.value, to: els.moveTo.value, amount: parseAmount(els.moveAmount.value) });
+    if (!res.ok) return showError(els.moveError, res.error);
+    closeDialog(els.dlgMove);
+    const m = res.data;
+    const name = (v) => (v === 'free' ? 'reste à vivre' : (spendEnv(v) || {}).name);
+    toast(`${money(m.amount)} déplacés : ${name(m.from)} → ${name(m.to)}.`, { action: { label: 'Annuler', run: () => { if (deleteMove(m.id).ok) toast('Déplacement annulé.'); } } });
+  }));
+
+  els.envMove.addEventListener('click', () => {
+    const env = spendEnv(envUi.id);
+    if (!env) return;
+    const row = envRow(env, currentMonth());
+    openMove(row.left < 0 ? { to: env.id } : { from: env.id });
+  });
+
+  els.menuResetAll.addEventListener('click', async () => {
+    closeDialog(els.dlgMenu);
+    const confirmed = await confirmAction({
+      title: 'Tout remettre à zéro ?',
+      text: 'Toutes tes enveloppes repartent pleines dès aujourd\'hui. Les dépenses déjà faites restent dans le journal et sont prises sur ton reste à vivre.',
+      confirmLabel: 'Tout remettre à zéro'
+    });
+    if (!confirmed) return;
+    const res = resetAllEnvelopes();
+    if (!res.ok) return toast(res.error, 'error');
+    toast('Toutes les enveloppes repartent à zéro.', { action: { label: 'Annuler', run: () => {
+      for (const [id, prev] of res.data) { const e = findEnv(id); if (e) e.reset = prev; }
+      commit();
+    } } });
+  });
+
+  // ——— Ordre du mois (agenda) ———
+  function renderOrder(key) {
+    const d = derive(key);
+    const pays = payDates(key);
+    const payDay = pays.length ? `le ${shortDate(pays[0])}` : '';
+    const nCharges = state.recurring.filter((r) => r.type === 'expense' && !spendEnv(r.envId)).reduce((s, r) => s + occurrences(r, cycleStart(key), cycleEnd(key)).length, 0);
+    const steps = [
+      ['banknote', 'Paie', payDay, d.income, d.carried ? `dont ${signed(d.carried)} reportés du mois dernier` : d.extraIncome ? `dont ${money(d.extraIncome)} d'autres revenus` : ''],
+      ['piggy-bank', 'Épargne des projets', payDay ? `${payDay}, dès la paie` : 'dès la paie', -(d.projectsMonthly + d.deposits), ''],
+      ['repeat', 'Prélèvements', nCharges ? `${nCharges} ${plural(nCharges, 'échéance', 'échéances')}` : 'aucun', -d.charges, ''],
+      ['wallet', 'Enveloppes', 'au fil du mois', -(d.envAlloc + d.orphan), d.orphan ? `dont ${money(d.orphan)} hors enveloppe` : ''],
+      ['sparkles', 'Reste', 'en fin de mois', d.free, d.free < 0 ? 'à retirer du mois suivant' : '']
+    ];
+    fill(els.orderList, steps.map(([ic, title, when, amount, sub], i) => h('li', { class: 'order-step', dataset: { last: String(i === steps.length - 1), negative: String(i === steps.length - 1 && amount < 0) } },
+      h('span', { class: 'order-dot', 'aria-hidden': 'true' }, icon(ic)),
+      h('span', { class: 'order-body' }, h('strong', { text: title }), h('small', { text: [when, sub].filter(Boolean).join(' · ') })),
+      h('b', { class: 'order-amount', text: i === steps.length - 1 ? money(amount) : signed(amount) }))));
+  }
+
+  // ——— Historique (bilan) ———
+  function renderHistory() {
+    const range = ui.historyRange || 3;
+    const all = [...state.closings].sort((a, b) => (a.key < b.key ? 1 : -1));
+    if (!all.length) {
+      fill(els.rHistory, h('div', { class: 'empty' },
+        h('span', { class: 'empty-icon', 'aria-hidden': 'true' }, icon('history')),
+        h('h3', { text: 'Pas encore d\'historique' }),
+        h('p', { text: 'À la fin de chaque mois, la clôture fige un instantané ici : revenus, dépenses par enveloppe, reste et où il est allé. Il n\'est plus jamais modifié ensuite.' })));
+      return flushIcons();
+    }
+    const list = all.slice(0, range);
+    const avg = (f) => Math.round(list.reduce((s, c) => s + f(c.snapshot), 0) / list.length);
+    const names = new Map();
+    for (const c of [...list].reverse()) {
+      for (const e of c.snapshot.envs || []) {
+        if (!names.has(e.id)) names.set(e.id, { name: e.name, months: [] });
+        names.get(e.id).months.push({ key: c.key, spent: e.spent, budget: e.budget });
+      }
+    }
+    const trends = [...names.values()].map((t) => {
+      const avgSpent = Math.round(t.months.reduce((s, m) => s + m.spent, 0) / t.months.length);
+      const last = t.months[t.months.length - 1];
+      const kept = t.months.filter((m) => m.spent <= m.budget).length;
+      const delta = avgSpent > 0 ? Math.round(((last.spent - avgSpent) / avgSpent) * 100) : 0;
+      const peak = Math.max(1, ...t.months.map((m) => Math.max(m.spent, m.budget)));
+      return h('div', { class: 'trend-row' },
+        h('div', { class: 'trend-main' }, h('strong', { text: t.name }),
+          h('small', { text: `${money(avgSpent)} en moyenne · bien tenu ${kept}/${t.months.length} mois${t.months.length > 1 && Math.abs(delta) >= 10 ? ` · dernier mois ${delta > 0 ? '+' : ''}${delta} %` : ''}` })),
+        h('span', { class: 'spark', 'aria-hidden': 'true' }, t.months.map((m) => h('i', { dataset: { over: String(m.spent > m.budget) }, style: `height:${Math.max(6, Math.round((m.spent / peak) * 100))}%` }))));
+    });
+    const destination = (c) => {
+      const bits = [];
+      const keep = c.lines.filter((l) => l.action === 'keep' && l.left > 0).reduce((s, l) => s + l.left, 0);
+      const budget = c.lines.filter((l) => l.action === 'budget' && l.left > 0).reduce((s, l) => s + l.left, 0) + (c.free > 0 && c.freeAction === 'budget' ? c.free : 0);
+      const saved = c.lines.filter((l) => l.action === 'project' && l.left > 0).reduce((s, l) => s + l.left, 0) + (c.free > 0 && c.freeAction === 'project' ? c.free : 0);
+      if (keep) bits.push(`${money(keep)} reportés`);
+      if (budget) bits.push(`${money(budget)} remis au budget`);
+      if (saved) bits.push(`${money(saved)} épargnés`);
+      if (c.free < 0) bits.push(`déficit ${money(c.free)}`);
+      return bits.join(' · ') || 'rien à reporter';
+    };
+    const open = ui.historyOpen;
+    fill(els.rHistory,
+      h('div', { class: 'chips range', role: 'radiogroup', 'aria-label': 'Période comparée' }, [3, 6, 12].map((n) => h('button', { type: 'button', class: 'chip', role: 'radio', 'aria-checked': String(range === n), dataset: { range: String(n) } }, h('span', { text: `${n} mois` })))),
+      h('div', { class: 'tiles' },
+        h('div', { class: 'tile' }, h('span', { text: 'Revenus moyens' }), h('strong', { text: money(avg((s) => s.income)) })),
+        h('div', { class: 'tile' }, h('span', { text: 'Dépensé en moyenne' }), h('strong', { text: money(avg((s) => s.spent)) })),
+        h('div', { class: 'tile' }, h('span', { text: 'Reste moyen' }), h('strong', { text: money(avg((s) => s.free)) })),
+        h('div', { class: 'tile' }, h('span', { text: 'Mis de côté' }), h('strong', { text: money(list.reduce((s, c) => s + (c.snapshot.projects || 0), 0)) }))),
+      h('article', { class: 'card pad' }, h('h3', { text: 'Tendances par enveloppe' }), trends.length ? trends : h('p', { class: 'muted', text: 'Aucune enveloppe sur cette période.' })),
+      h('article', { class: 'card pad' }, h('h3', { text: 'Mois clôturés' }),
+        list.map((c) => h('div', { class: 'hist-month', dataset: { open: String(open === c.key) } },
+          h('button', { type: 'button', class: 'hist-head', dataset: { key: c.key }, 'aria-expanded': String(open === c.key) },
+            h('span', { class: 'hist-title' }, h('strong', { text: monthName(c.key) }), h('small', { text: `${money(c.snapshot.spent)} dépensés · ${destination(c)}` })),
+            h('b', { dataset: { negative: String(c.snapshot.free < 0) }, text: money(c.snapshot.free) })),
+          open === c.key ? h('div', { class: 'hist-detail' },
+            h('p', { class: 'muted small', text: `Du ${shortDate(c.snapshot.start)} au ${shortDate(c.snapshot.end)} · revenus ${money(c.snapshot.income)} · prélèvements ${money(c.snapshot.charges)} · projets ${money(c.snapshot.projects)}` }),
+            (c.snapshot.envs || []).map((e) => h('div', { class: 'hist-env', dataset: { tone: e.left >= 0 ? 'ok' : 'bad' } },
+              h('span', { text: e.name }),
+              h('small', { text: `${money(e.spent)} / ${money(e.budget)}` }),
+              h('em', { class: 'badge', dataset: { tone: e.left >= 0 ? 'ok' : 'bad' }, text: e.left >= 0 ? 'Bien tenu' : 'Dépassée' })))) : null))));
+    flushIcons();
+  }
+
   function openSettings() {
     els.setDay.value = String(state.salaryDay);
     els.setOpening.value = state.openingBalance === null ? '' : toInputValue(state.openingBalance);
+    setRadio(els.setForm, 'set-cycle', state.prefs.cycle);
+    els.setCyclePayText.textContent = `Jour de paie (le ${state.salaryDay})`;
+    els.setAutoClose.checked = state.prefs.closing.auto;
     hideError(els.setError);
     closeDialog(els.dlgMenu);
     openDialog(els.dlgSettings);
   }
 
+  els.setDay.addEventListener('input', () => {
+    const day = parseDayInput(els.setDay.value);
+    els.setCyclePayText.textContent = day ? `Jour de paie (le ${day})` : 'Jour de paie';
+  });
+
   els.setForm.addEventListener('submit', guard(() => {
     const raw = els.setOpening.value.trim();
     const opening = raw === '' ? null : (parseAmount(raw) ?? undefined);
-    const res = setSettings({ salaryDay: parseDayInput(els.setDay.value), openingBalance: opening });
+    const res = setSettings({ salaryDay: parseDayInput(els.setDay.value), openingBalance: opening, cycle: checkedValue(els.setForm, 'set-cycle'), autoClose: els.setAutoClose.checked });
     if (!res.ok) return showError(els.setError, res.error);
     closeDialog(els.dlgSettings);
     toast('Réglages enregistrés.');
@@ -3377,6 +4002,11 @@
     toast(`Mois clôturé : ${money(total)} versés dans ${names.length > 2 ? `${names.length} projets` : names.map((n) => `« ${n} »`).join(' et ')}.`, { duration: 5200 });
   }
 
+  function announceClosed(keys) {
+    if (!keys || !keys.length) return;
+    toast(`${keys.length > 1 ? `${keys.length} mois clôturés` : `${capitalize(monthName(keys[0]).toLowerCase())} clôturé`} automatiquement : voir Bilan › Historique.`, { duration: 5200 });
+  }
+
   function announcePosted(posted) {
     if (!posted.length) return;
     const names = [...new Set(posted.map((t) => t.note))];
@@ -3401,6 +4031,8 @@
   els.insights.addEventListener('click', (e) => {
     const act = e.target.closest('[data-action]');
     if (act && act.dataset.action === 'export') return exportData();
+    if (act && act.dataset.action === 'close') return openClosing();
+    if (act && act.dataset.action.startsWith('cover:')) return openMove({ to: act.dataset.action.slice(6) });
     const btn = e.target.closest('[data-tab]');
     if (btn) setTab(btn.dataset.tab);
   });
@@ -3429,12 +4061,32 @@
   els.jPrev.addEventListener('click', () => { ui.journalMonth = shiftMonth(ui.journalMonth || currentMonth(), -1); renderJournal(); });
   els.jNext.addEventListener('click', () => { ui.journalMonth = shiftMonth(ui.journalMonth || currentMonth(), 1); renderJournal(); });
   els.jFilter.addEventListener('change', () => { ui.journalFilter = els.jFilter.value; renderJournal(); });
-  els.jList.addEventListener('click', (e) => {
+  els.jList.addEventListener('click', async (e) => {
+    const mv = e.target.closest('[data-move]');
+    if (mv) {
+      const m = state.moves.find((x) => x.id === mv.dataset.move);
+      if (!m) return;
+      const confirmed = await confirmAction({ title: 'Annuler ce déplacement ?', text: `${money(m.amount)} reviennent à leur place d'origine.`, confirmLabel: 'Annuler le déplacement' });
+      if (!confirmed) return;
+      const res = deleteMove(m.id);
+      if (res.ok) toast('Déplacement annulé.', { action: { label: 'Rétablir', run: () => { state.moves.push(res.data); commit(); } } });
+      return;
+    }
     const row = e.target.closest('.tx-row');
     const tx = row && state.transactions.find((t) => t.id === row.dataset.id);
     if (tx) openTx(tx);
   });
 
+  els.rMode.addEventListener('change', () => {
+    ui.reportMode = checkedValue(els.rMode, 'r-mode') === 'history' ? 'history' : 'month';
+    renderReport();
+  });
+  els.rHistory.addEventListener('click', (e) => {
+    const range = e.target.closest('[data-range]');
+    if (range) { ui.historyRange = Number(range.dataset.range); return renderHistory(); }
+    const head = e.target.closest('.hist-head');
+    if (head) { ui.historyOpen = ui.historyOpen === head.dataset.key ? null : head.dataset.key; renderHistory(); }
+  });
   els.rPrev.addEventListener('click', () => { ui.reportMonth = shiftMonth(ui.reportMonth || currentMonth(), -1); renderReport(); });
   els.rNext.addEventListener('click', () => { ui.reportMonth = shiftMonth(ui.reportMonth || currentMonth(), 1); renderReport(); });
 
@@ -3566,10 +4218,19 @@
   window.addEventListener('hashchange', applyHash);
 
   function tick() {
+    if (!state.lastClosed) state.lastClosed = shiftMonth(currentMonth(), -1);
     const credits = runRollover();
     const posted = postRecurring();
-    if (credits.size || posted.length) save();
-    return { credits, posted };
+    const safety = ensureSafety();
+    const closed = [];
+    if (state.prefs.closing.auto) {
+      for (const key of pendingClosings()) {
+        const res = closeMonth(key);
+        if (res.ok) closed.push(key);
+      }
+    }
+    if (credits.size || posted.length || safety || closed.length) save();
+    return { credits, posted, closed };
   }
 
   let lastDay = clock.today();
@@ -3577,7 +4238,7 @@
     const today = clock.today();
     if (today === lastDay) return;
     lastDay = today;
-    const { credits, posted } = tick();
+    const { credits, posted, closed } = tick();
     ui.journalMonth = null;
     ui.reportMonth = null;
     ui.agendaMonth = null;
@@ -3585,6 +4246,8 @@
     render();
     announceCredits(credits);
     announcePosted(posted);
+    announceClosed(closed);
+    if (pendingClosings().length && !state.prefs.closing.auto && !document.querySelector('dialog[open]')) openClosing();
   }
   setInterval(checkClock, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkClock(); });
@@ -3613,9 +4276,11 @@
     tick: () => { const r = tick(); render(); return r; },
     derive, cashflow, forecast, upcomingEvents, computeInsights, parseStatement, parseReceipt, receiptDetail, runRollover,
     postRecurring, occurrences, periodWindow, envRow, projectPlan, applyTemplate, render, setTab, guessEnvelope,
+    cycleStart, cycleEnd, budgetKey, currentMonth, pendingClosings, closingDefaults, nextPayMonth,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
-      addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv
+      addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
+      closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData
     }
   };
 
@@ -3623,8 +4288,10 @@
   save();
   render();
   securePersistence();
+  announceClosed(boot.closed);
   announceCredits(boot.credits);
   announcePosted(boot.posted);
   applyHash();
   if (!state.prefs.onboarded && state.salary <= 0 && state.envelopes.length === 0) openWelcome();
+  else if (pendingClosings().length && !state.prefs.closing.auto) openClosing();
 })();

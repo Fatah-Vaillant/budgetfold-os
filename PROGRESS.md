@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 1 — Fiabilité**
+**Phase 3 — Projets et simulations**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -37,7 +37,31 @@ Décisions de la phase 1 :
 - Tests découpés par domaine dès maintenant (`tests/run.js` lance tous les `*.test.js`) : `data`, `projects`, `receipts`, `ocr`, plus l'ancien `app`.
 
 ## Phase 2 — Cycle du mois, clôture et historique
-_À planifier._
+Plan :
+1. Mois budgétaire : `cycleStart` / `cycleEnd` / `budgetKey` remplacent les mois calendaires dans tous les calculs (enveloppes, reste à vivre, agenda, journal, bilan, trésorerie).
+2. Données v4 : `prefs.cycle`, `prefs.closing`, `lastClosed`, `closings[]` (instantané figé), `moves[]`, projet `safety`.
+3. Moteur : `closeMonth`, `reopenMonth`, `moveMoney`, `resetAllEnvelopes`, reports (`carryIn`, `closingCarry`), clôture automatique dans `tick()`.
+4. Interface : assistant de clôture, feuille « Déplacer de l'argent », remise à zéro globale (menu), réglages (cycle, clôture auto), ordre du mois (agenda), Bilan › Historique, badge « Bien tenu ».
+
+- [x] Début du mois budgétaire réglable (jour de paie ou 1er)
+- [x] Ordre d'un mois affiché dans l'agenda
+- [x] Remise à zéro de toutes les enveloppes (manuelle ; automatique = chaque début de cycle)
+- [x] Assistant de clôture (reporter / remettre au budget / projet ou matelas ; déficit reporté ; préférence mémorisée ; clôture automatique)
+- [x] Déplacer de l'argent entre enveloppes, trace au journal, « couvrir » un dépassement
+- [x] Historique figé (instantané par mois) + écran Historique (3/6/12 mois, tendances, détail)
+- [x] Badge « Bien tenu »
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 2 :
+- **Cycle par défaut** : jour de paie pour un nouvel utilisateur ; les sauvegardes v1 à v3 passent en cycle « 1er du mois » pour qu'aucun chiffre ne change. Réglable dans Réglages.
+- Un mois budgétaire commencé après le 15 porte le nom du mois suivant (paie le 28 octobre → budget de novembre).
+- **Remise à zéro automatique** : une enveloppe au mois repart à zéro à chaque début de cycle (c'est le fonctionnement même du cycle). La remise à zéro globale manuelle est dans le menu.
+- **Dépassement** : comme le dit CLAUDE.md, un dépassement est pris sur le reste à vivre du mois même. Si le mois finit dans le rouge, le déficit est retiré du mois suivant (report automatique, non désactivable).
+- Le reste à vivre non réparti d'un mois clôturé est remis au budget du mois suivant par défaut (rien ne disparaît) ; on peut le verser sur un projet ou le matelas.
+- Seules les enveloppes dont la période se termine avec le mois sont proposées à la clôture (pas les enveloppes à la semaine).
+- Le versement de clôture vers un projet est daté du premier jour du mois suivant et ne réduit pas son reste à vivre (il vient des réserves du mois clos).
+- Changer de cycle ou de jour de paie repart du mois en cours, sans clôture ni versement rétroactif.
+- Matelas de sécurité : projet Plan créé une fois (objectif de départ : 3 mois de salaire, modifiable ; il peut dépasser son objectif). S'il est supprimé, il ne revient pas.
 
 ## Phase 3 — Projets et simulations
 _À planifier._
