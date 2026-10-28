@@ -1,5 +1,5 @@
-const CACHE = 'budgetfold-os-v2';
-const CORE = ['./', './index.html', './style.css', './script.js', './manifest.json', './icon.svg'];
+const CACHE = 'budgetfold-os-v3';
+const CORE = ['./', './index.html', './style.css', './script.js', './manifest.json', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

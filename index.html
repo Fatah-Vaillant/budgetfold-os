@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="BudgetFold">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -17,10 +17,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <script src="https://unpkg.com/lucide@latest" defer></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js" defer></script>
   <script src="script.js" defer></script>
 </head>
-<body>
+<body data-tab="home">
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
@@ -30,9 +30,12 @@
           <span>Financial Life OS</span>
         </div>
       </div>
-      <button type="button" class="icon-btn" id="open-menu" aria-label="Ouvrir les options">
-        <i data-lucide="sliders-horizontal"></i>
-      </button>
+      <div class="topbar-actions">
+        <button type="button" class="btn primary compact add-desktop" id="top-add"><i data-lucide="plus"></i>Ajouter</button>
+        <button type="button" class="icon-btn" id="open-menu" aria-label="Ouvrir les options">
+          <i data-lucide="sliders-horizontal"></i>
+        </button>
+      </div>
     </header>
 
     <main class="layout">
@@ -94,11 +97,11 @@
               <dd id="stat-spent">0 €</dd>
             </div>
             <div class="stat">
-              <dt>Encore dispo</dt>
+              <dt>Dans tes enveloppes</dt>
               <dd id="stat-left">0 €</dd>
             </div>
             <div class="stat">
-              <dt>À prélever</dt>
+              <dt>À venir ce mois</dt>
               <dd id="stat-upcoming">0 €</dd>
             </div>
           </dl>
@@ -111,25 +114,34 @@
           </ul>
         </article>
 
-        <article class="card today" id="today" data-state="idle">
-          <div class="today-head">
-            <span class="today-label">Budget du jour</span>
-            <span class="today-days" id="today-days"></span>
+        <article class="card upcoming">
+          <div class="upcoming-head">
+            <div>
+              <h2>À venir</h2>
+              <p class="muted" id="up-sub"></p>
+            </div>
+            <button type="button" class="link-btn" id="up-more"><i data-lucide="calendar-days"></i>Agenda</button>
           </div>
-          <div class="today-main">
-            <strong class="today-amount" id="today-amount">—</strong>
-            <span class="today-caption" id="today-caption"></span>
-          </div>
-          <div class="bar" aria-hidden="true"><div class="bar-fill" id="today-fill"></div></div>
-          <p class="today-sub" id="today-sub"></p>
-          <button type="button" class="btn primary block" id="btn-add"><i data-lucide="plus"></i>Ajouter une dépense</button>
+          <div class="up-list" id="up-list"></div>
+          <p class="up-foot" id="up-foot"></p>
         </article>
       </aside>
 
       <section class="column column-main" aria-label="Contenu">
+        <button type="button" class="mini" id="mini" aria-label="Revenir à l'accueil">
+          <span class="mini-text">
+            <small id="mini-month"></small>
+            <span>Reste à vivre <strong id="mini-free">0 €</strong></span>
+          </span>
+          <span class="mini-bar" aria-hidden="true">
+            <i class="mini-seg seg-c" id="mini-c"></i><i class="mini-seg seg-s" id="mini-s"></i><i class="mini-seg seg-g" id="mini-g"></i>
+          </span>
+        </button>
+
         <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
           <button type="button" class="tab" role="tab" data-tab="home" aria-selected="true"><i data-lucide="layout-grid"></i><span>Accueil</span></button>
           <button type="button" class="tab" role="tab" data-tab="journal" aria-selected="false"><i data-lucide="receipt"></i><span>Journal</span></button>
+          <button type="button" class="tab-add" id="nav-add" aria-label="Ajouter une opération"><i data-lucide="plus"></i></button>
           <button type="button" class="tab" role="tab" data-tab="agenda" aria-selected="false"><i data-lucide="calendar-days"></i><span>Agenda</span></button>
           <button type="button" class="tab" role="tab" data-tab="report" aria-selected="false"><i data-lucide="trending-up"></i><span>Bilan</span></button>
         </nav>
@@ -139,7 +151,7 @@
             <div class="insights" id="insights"></div>
 
             <div class="section-head">
-              <h2>Enveloppes du mois</h2>
+              <h2>Enveloppes</h2>
               <span class="count" id="count-spend">0</span>
               <button type="button" class="link-btn" id="add-spend"><i data-lucide="plus"></i>Nouvelle</button>
             </div>
@@ -147,11 +159,11 @@
             <div class="empty" id="empty-spend">
               <span class="empty-icon" aria-hidden="true"><i data-lucide="wallet"></i></span>
               <h3>Aucune enveloppe de dépenses</h3>
-              <p>Crée une enveloppe (Courses, Loisirs…) : son montant est réservé dès la création sur ton reste à vivre.</p>
+              <p>Crée une enveloppe (Courses, Loisirs…) par semaine, par mois ou plus : son montant est réservé sur ton reste à vivre.</p>
             </div>
 
             <div class="section-head">
-              <h2>Projets de vie</h2>
+              <h2>Projets</h2>
               <span class="count" id="count-project">0</span>
               <button type="button" class="link-btn" id="add-project"><i data-lucide="plus"></i>Nouveau</button>
             </div>
@@ -159,11 +171,15 @@
             <div class="empty compact" id="empty-project">
               <span class="empty-icon" aria-hidden="true"><i data-lucide="target"></i></span>
               <h3>Un projet en tête ?</h3>
-              <p>Voiture, apport immobilier, voyage : fixe un objectif et une mise mensuelle, on s'occupe du suivi.</p>
+              <p>Voiture, apport, voyage : fixe un objectif. Mode « Actif » pour épargner chaque mois, ou « Plan » pour simuler sans rien bloquer.</p>
             </div>
           </section>
 
           <section class="view" data-view="journal" role="tabpanel" hidden>
+            <header class="view-head">
+              <h1>Journal</h1>
+              <p>Toutes tes opérations, passées et prévues.</p>
+            </header>
             <div class="period">
               <button type="button" class="icon-btn" id="j-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
               <strong id="j-label"></strong>
@@ -175,22 +191,42 @@
                 <label class="visually-hidden" for="j-filter">Filtrer</label>
                 <select id="j-filter"></select>
               </div>
-              <button type="button" class="btn primary compact" id="j-add"><i data-lucide="plus"></i>Ajouter</button>
             </div>
             <div id="j-list"></div>
             <div class="empty" id="j-empty">
               <span class="empty-icon" aria-hidden="true"><i data-lucide="receipt"></i></span>
               <h3>Rien à afficher</h3>
-              <p>Aucune opération pour ce mois et ce filtre. Ajoute une dépense depuis le bouton +, ou importe ton relevé bancaire depuis les options.</p>
+              <p>Aucune opération pour ce mois et ce filtre. Touche le bouton + pour en ajouter une.</p>
             </div>
           </section>
 
           <section class="view" data-view="agenda" role="tabpanel" hidden>
+            <header class="view-head">
+              <h1>Agenda</h1>
+              <p>Ce qui est passé, ce qui arrive, et les mois suivants.</p>
+            </header>
+            <article class="card pad">
+              <div class="period in-card">
+                <button type="button" class="icon-btn" id="a-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
+                <strong id="cal-label"></strong>
+                <button type="button" class="icon-btn" id="a-next" aria-label="Mois suivant"><i data-lucide="chevron-right"></i></button>
+              </div>
+              <div class="cal-week" aria-hidden="true"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
+              <div class="calendar" id="calendar"></div>
+              <ul class="chart-legend cal-legend">
+                <li><i class="dot dot-spent"></i>Dépenses</li>
+                <li><i class="dot dot-charge"></i>Prélèvement</li>
+                <li><i class="dot dot-income"></i>Revenu</li>
+                <li><i class="dot dot-planned"></i>Prévu</li>
+              </ul>
+              <div class="day-detail" id="day-detail"></div>
+            </article>
+
             <article class="card pad">
               <div class="card-head">
                 <div>
-                  <h2>Trésorerie du mois</h2>
-                  <p class="muted">Ton solde jour après jour, avec les prélèvements à venir.</p>
+                  <h2 id="cash-title">Trésorerie</h2>
+                  <p class="muted">Ton solde jour après jour, avec ce qui est prévu.</p>
                 </div>
                 <button type="button" class="link-btn" id="cash-edit"><i data-lucide="sliders-horizontal"></i>Réglages</button>
               </div>
@@ -206,27 +242,31 @@
 
             <article class="card pad">
               <div class="card-head">
-                <h2 id="cal-label"></h2>
+                <div>
+                  <h2>Les 6 prochains mois</h2>
+                  <p class="muted">Revenus, dépenses prévues et marge restante.</p>
+                </div>
               </div>
-              <div class="cal-week" aria-hidden="true"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
-              <div class="calendar" id="calendar"></div>
-              <div class="day-detail" id="day-detail"></div>
+              <div class="forecast" id="forecast"></div>
             </article>
 
             <div class="section-head">
               <h2>Échéancier</h2>
               <span class="rec-summary" id="rec-summary"></span>
-              <button type="button" class="link-btn" id="add-recurring"><i data-lucide="plus"></i>Ajouter</button>
             </div>
             <div class="rec-list" id="rec-list"></div>
             <div class="empty compact" id="rec-empty">
-              <span class="empty-icon" aria-hidden="true"><i data-lucide="calendar-days"></i></span>
-              <h3>Aucune échéance</h3>
-              <p>Ajoute ton loyer, tes abonnements ou une aide mensuelle : ils apparaissent dans le calendrier et sont réservés sur ton reste à vivre.</p>
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="repeat"></i></span>
+              <h3>Rien de récurrent</h3>
+              <p>Touche +, saisis ton loyer, un abonnement ou une aide, puis choisis une répétition (chaque mois, chaque semaine…). Tout est compté automatiquement.</p>
             </div>
           </section>
 
           <section class="view" data-view="report" role="tabpanel" hidden>
+            <header class="view-head">
+              <h1>Bilan</h1>
+              <p>Comprendre où part ton argent.</p>
+            </header>
             <div class="period">
               <button type="button" class="icon-btn" id="r-prev" aria-label="Mois précédent"><i data-lucide="chevron-left"></i></button>
               <strong id="r-label"></strong>
@@ -234,6 +274,7 @@
             </div>
             <div class="tiles" id="r-tiles"></div>
             <article class="card pad" id="r-bars"></article>
+            <article class="card pad" id="r-days"></article>
             <article class="card pad" id="r-notes"></article>
           </section>
         </div>
@@ -246,51 +287,85 @@
     </footer>
   </div>
 
-  <button type="button" class="fab" id="fab" aria-label="Ajouter une dépense"><i data-lucide="plus"></i></button>
-
   <dialog class="sheet" id="dlg-tx" aria-labelledby="tx-title">
     <form id="tx-form" novalidate>
       <header class="sheet-head">
         <div>
-          <h2 id="tx-title">Nouvelle dépense</h2>
+          <h2 id="tx-title">Ajouter</h2>
           <p id="tx-sub"></p>
         </div>
         <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
       </header>
-      <div class="segmented" id="tx-mode">
+      <div class="segmented three" id="tx-mode">
         <input type="radio" name="tx-mode" id="tx-mode-expense" value="expense" checked>
         <label for="tx-mode-expense"><i data-lucide="minus"></i>Dépense</label>
         <input type="radio" name="tx-mode" id="tx-mode-income" value="income">
         <label for="tx-mode-income"><i data-lucide="plus"></i>Revenu</label>
+        <input type="radio" name="tx-mode" id="tx-mode-deposit" value="deposit">
+        <label for="tx-mode-deposit"><i data-lucide="piggy-bank"></i>Épargne</label>
       </div>
       <div class="field">
-        <label for="tx-amount">Montant</label>
+        <div class="field-top">
+          <label for="tx-amount">Montant</label>
+          <button type="button" class="scan-btn" id="tx-scan"><i data-lucide="scan-line"></i>Scanner un ticket</button>
+        </div>
         <div class="money-input large">
           <input id="tx-amount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="0">
           <span>€</span>
         </div>
+        <div class="scan-status" id="scan-status" hidden>
+          <span class="scan-spinner" aria-hidden="true"></span>
+          <span id="scan-text">Lecture du ticket…</span>
+        </div>
       </div>
-      <div class="quick" id="tx-quick"></div>
+      <div class="field">
+        <label for="tx-label" id="tx-label-title">Quoi ?</label>
+        <input id="tx-label" type="text" maxlength="80" autocomplete="off" placeholder="Courses, loyer, café…">
+      </div>
       <div class="field" id="tx-env-field">
         <span class="field-label" id="tx-env-label">Enveloppe</span>
         <div class="chips" id="tx-chips" role="radiogroup" aria-labelledby="tx-env-label"></div>
       </div>
       <div class="field-row">
         <div class="field">
-          <label for="tx-note">Note (facultatif)</label>
-          <input id="tx-note" type="text" maxlength="80" autocomplete="off" placeholder="Ex : Marché, cinéma…">
-        </div>
-        <div class="field">
-          <label for="tx-date">Date</label>
+          <label for="tx-date" id="tx-date-label">Date</label>
           <input id="tx-date" type="date">
         </div>
+        <div class="field" id="tx-repeat-field">
+          <label for="tx-repeat">Répétition</label>
+          <div class="select-wrap">
+            <select id="tx-repeat">
+              <option value="once">Une seule fois</option>
+              <option value="day">Chaque jour</option>
+              <option value="week">Chaque semaine</option>
+              <option value="2weeks">Toutes les 2 semaines</option>
+              <option value="month">Chaque mois</option>
+              <option value="2months">Tous les 2 mois</option>
+              <option value="quarter">Chaque trimestre</option>
+              <option value="year">Chaque année</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="field" id="tx-until-field" hidden>
+        <label for="tx-until">Jusqu'au (facultatif)</label>
+        <input id="tx-until" type="date">
+      </div>
+      <details class="detail-box" id="tx-detail-box">
+        <summary>Détail (articles, remarques)</summary>
+        <textarea id="tx-detail" rows="4" maxlength="1500" placeholder="Ex : liste des articles du ticket"></textarea>
+      </details>
+      <div class="series-note" id="tx-series" hidden>
+        <i data-lucide="repeat"></i>
+        <span id="tx-series-text"></span>
+        <button type="button" class="link-btn" id="tx-series-edit">Modifier la série</button>
       </div>
       <p class="hint" id="tx-hint"></p>
       <p class="field-error" id="tx-error" role="alert" hidden></p>
       <div class="sheet-actions three">
         <button type="button" class="btn ghost danger-text" id="tx-delete" hidden><i data-lucide="trash-2"></i>Supprimer</button>
         <button type="button" class="btn ghost" data-close>Annuler</button>
-        <button type="submit" class="btn primary" id="tx-submit">Ajouter la dépense</button>
+        <button type="submit" class="btn primary" id="tx-submit">Ajouter</button>
       </div>
     </form>
   </dialog>
@@ -300,38 +375,59 @@
       <header class="sheet-head">
         <div>
           <h2 id="env-title">Nouvelle enveloppe</h2>
-          <p>Le montant est bloqué immédiatement sur ton reste à vivre.</p>
+          <p id="env-sub">Le montant est réservé sur ton reste à vivre.</p>
         </div>
         <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
       </header>
       <div class="segmented" id="env-kind-wrap">
         <input type="radio" name="env-kind" id="env-kind-spend" value="spend" checked>
-        <label for="env-kind-spend"><i data-lucide="wallet"></i>Dépenses</label>
+        <label for="env-kind-spend"><i data-lucide="wallet"></i>Enveloppe</label>
         <input type="radio" name="env-kind" id="env-kind-project" value="project">
-        <label for="env-kind-project"><i data-lucide="target"></i>Projet de vie</label>
+        <label for="env-kind-project"><i data-lucide="target"></i>Projet</label>
       </div>
       <div class="field">
         <label for="env-name">Nom</label>
-        <input id="env-name" type="text" maxlength="40" autocomplete="off" placeholder="Courses, Voyage, Apport…">
+        <input id="env-name" type="text" maxlength="40" autocomplete="off" placeholder="Courses, Coiffeur, Voyage…">
       </div>
       <div id="env-spend-fields">
-        <div class="field">
-          <label for="env-max">Montant max par mois</label>
-          <div class="money-input">
-            <input id="env-max" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
-            <span>€</span>
+        <div class="field-row">
+          <div class="field">
+            <label for="env-max">Budget</label>
+            <div class="money-input">
+              <input id="env-max" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+              <span>€</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="env-period">Par</label>
+            <div class="select-wrap">
+              <select id="env-period">
+                <option value="week">Semaine</option>
+                <option value="2weeks">2 semaines</option>
+                <option value="month" selected>Mois</option>
+                <option value="2months">2 mois</option>
+                <option value="quarter">Trimestre</option>
+                <option value="year">An</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
       <div id="env-project-fields" hidden>
-        <div class="field">
-          <label for="env-target">Objectif final</label>
-          <div class="money-input">
-            <input id="env-target" type="text" inputmode="decimal" autocomplete="off" placeholder="10 000">
-            <span>€</span>
-          </div>
+        <div class="segmented" id="env-mode-wrap">
+          <input type="radio" name="env-mode" id="env-mode-active" value="active" checked>
+          <label for="env-mode-active"><i data-lucide="play"></i>Actif</label>
+          <input type="radio" name="env-mode" id="env-mode-plan" value="plan">
+          <label for="env-mode-plan"><i data-lucide="flask-conical"></i>Plan (simulation)</label>
         </div>
         <div class="field-row">
+          <div class="field">
+            <label for="env-target">Objectif</label>
+            <div class="money-input">
+              <input id="env-target" type="text" inputmode="decimal" autocomplete="off" placeholder="10 000">
+              <span>€</span>
+            </div>
+          </div>
           <div class="field">
             <label for="env-saved">Déjà épargné</label>
             <div class="money-input">
@@ -339,78 +435,31 @@
               <span>€</span>
             </div>
           </div>
+        </div>
+        <div class="field-row">
           <div class="field">
-            <label for="env-monthly">Mise mensuelle</label>
+            <label for="env-deadline">Pour quand ? (facultatif)</label>
+            <input id="env-deadline" type="month" placeholder="AAAA-MM">
+          </div>
+          <div class="field">
+            <label for="env-monthly">Mise par mois</label>
             <div class="money-input">
-              <input id="env-monthly" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+              <input id="env-monthly" type="text" inputmode="decimal" autocomplete="off" placeholder="Auto">
               <span>€</span>
             </div>
           </div>
         </div>
       </div>
+      <div class="plan-box" id="env-plan" hidden></div>
       <p class="hint" id="env-hint"></p>
       <p class="field-error" id="env-error" role="alert" hidden></p>
+      <div class="env-extra" id="env-extra" hidden>
+        <button type="button" class="btn ghost" id="env-reset"><i data-lucide="rotate-ccw"></i>Remettre à zéro</button>
+        <button type="button" class="btn ghost danger-text" id="env-delete"><i data-lucide="trash-2"></i>Supprimer</button>
+      </div>
       <div class="sheet-actions">
         <button type="button" class="btn ghost" data-close>Annuler</button>
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog class="sheet" id="dlg-rec" aria-labelledby="rec-title">
-    <form id="rec-form" novalidate>
-      <header class="sheet-head">
-        <div>
-          <h2 id="rec-title">Nouvelle échéance</h2>
-          <p>Un prélèvement ou un revenu qui revient chaque mois.</p>
-        </div>
-        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
-      </header>
-      <div class="segmented" id="rec-type-wrap">
-        <input type="radio" name="rec-type" id="rec-type-charge" value="charge" checked>
-        <label for="rec-type-charge"><i data-lucide="minus"></i>Charge fixe</label>
-        <input type="radio" name="rec-type" id="rec-type-income" value="income">
-        <label for="rec-type-income"><i data-lucide="plus"></i>Revenu</label>
-      </div>
-      <div class="field">
-        <label for="rec-label">Nom</label>
-        <input id="rec-label" type="text" maxlength="40" autocomplete="off" placeholder="Loyer, Électricité, APL…">
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="rec-amount">Montant</label>
-          <div class="money-input">
-            <input id="rec-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
-            <span>€</span>
-          </div>
-        </div>
-        <div class="field">
-          <label for="rec-day">Jour du mois</label>
-          <input id="rec-day" type="text" inputmode="numeric" autocomplete="off" placeholder="1 à 31">
-        </div>
-      </div>
-      <div class="field">
-        <label for="rec-cat">Catégorie</label>
-        <div class="select-wrap">
-          <select id="rec-cat">
-            <option value="logement">Logement</option>
-            <option value="energie">Énergie &amp; internet</option>
-            <option value="abonnement">Abonnement</option>
-            <option value="assurance">Assurance</option>
-            <option value="transport">Transport</option>
-            <option value="telephone">Téléphone</option>
-            <option value="sante">Santé</option>
-            <option value="revenu">Revenu</option>
-            <option value="autre">Autre</option>
-          </select>
-        </div>
-      </div>
-      <p class="hint" id="rec-hint"></p>
-      <p class="field-error" id="rec-error" role="alert" hidden></p>
-      <div class="sheet-actions three">
-        <button type="button" class="btn ghost danger-text" id="rec-delete" hidden><i data-lucide="trash-2"></i>Supprimer</button>
-        <button type="button" class="btn ghost" data-close>Annuler</button>
-        <button type="submit" class="btn primary">Enregistrer</button>
       </div>
     </form>
   </dialog>
@@ -419,7 +468,7 @@
     <form id="set-form" novalidate>
       <header class="sheet-head">
         <div>
-          <h2 id="set-title">Réglages du mois</h2>
+          <h2 id="set-title">Réglages</h2>
           <p>Pour une trésorerie plus fiable.</p>
         </div>
         <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
@@ -531,7 +580,7 @@
         <li>
           <button type="button" class="menu-item" id="menu-settings">
             <span class="menu-ico"><i data-lucide="calendar-clock"></i></span>
-            <span><strong>Réglages du mois</strong><small>Jour de paie, solde de départ</small></span>
+            <span><strong>Réglages</strong><small>Jour de paie, solde de départ</small></span>
           </button>
         </li>
         <li>
@@ -559,6 +608,7 @@
 
   <input type="file" id="import-file" accept="application/json,.json" hidden>
   <input type="file" id="csv-file" accept=".csv,.txt,text/csv,text/plain" hidden>
+  <input type="file" id="scan-file" accept="image/*" hidden>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>
