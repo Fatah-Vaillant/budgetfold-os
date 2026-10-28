@@ -762,13 +762,13 @@
     return `${years} ${plural(years, 'an', 'ans')}${rest ? ` ${rest} mois` : ''}`;
   }
 
-  function projectPlan(e, freeNow = derive().free) {
+  // `reserved` : ce que ce projet bloque déjà dans `freeNow` (0 pour un projet en cours de saisie).
+  function projectPlan(e, freeNow = derive().free, reserved = projectContribution(e, currentMonth())) {
     const cm = currentMonth();
     const missing = Math.max(0, e.target - e.saved);
     const months = e.deadline ? Math.max(1, monthDiff(cm, e.deadline) + 1) : null;
     const needed = months ? Math.ceil(missing / months / 100) * 100 : null;
-    const own = projectContribution(e, cm);
-    const capacity = Math.max(0, freeNow + own);
+    const capacity = Math.max(0, freeNow + reserved);
     const monthly = e.monthly > 0 ? e.monthly : needed || 0;
     const gap = monthly - capacity;
     const eta = monthly > 0 ? shiftMonth(cm, Math.max(0, Math.ceil(missing / monthly) - 1)) : null;
@@ -2790,7 +2790,7 @@
     }
     if (!input.target || input.saved === null || input.monthly === null) return setHint(els.envHint, 'Indique au moins un objectif.');
     const probe = { ...(existing || {}), ...input };
-    const p = projectPlan(probe, d.free + (existing ? 0 : 0));
+    const p = projectPlan(probe, d.free, existing && existing.kind === 'project' ? projectContribution(existing, d.key) : 0);
     const lines = [];
     if (input.saved >= input.target) lines.push(['ok', 'Objectif déjà atteint.']);
     else {

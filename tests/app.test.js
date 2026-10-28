@@ -194,6 +194,34 @@ const D = (p, key) => p.evaluate((k) => { const d = window.BudgetFold.derive(k);
     await q.close();
   }
 
+  // 5b. Bug 1.1 : la marge affichée pendant la saisie d'un projet Actif
+  {
+    const q = await H.open({ storage: clone(demo) });
+    const free = (await D(q)).free;
+    check('bug 1.1: demo free 599,94', free === 59994, free);
+    const sheet = (o) => q.evaluate((o) => {
+      const B = window.BudgetFold;
+      const $ = (id) => document.getElementById(id);
+      B.actions.openEnv(o.edit ? { env: B.getState().envelopes.find((x) => x.id === o.edit) } : { kind: 'project' });
+      for (const [id, v] of Object.entries(o.fields)) { $(id).value = v; $(id).dispatchEvent(new Event('input')); }
+      const text = $('env-plan').textContent.replace(/[\s  ]/g, '');
+      $('dlg-env').close();
+      return text;
+    }, o);
+
+    let box = await sheet({ fields: { 'env-name': 'Moto', 'env-target': '5000', 'env-monthly': '300' } });
+    check('bug 1.1: new active project, margin = real margin', /Tamargeactuelle:599,94€/.test(box), box);
+    check('bug 1.1: new active project, 299,94 left after 300 €', /resterait299,94€/.test(box), box);
+
+    box = await sheet({ fields: { 'env-name': 'Moto', 'env-target': '3000', 'env-deadline': '2026-12' } });
+    check('bug 1.1: auto mise 1000, margin = real margin', /Tamargeactuelle:599,94€/.test(box), box);
+    check('bug 1.1: auto mise 1000 reported as too big', /Ilmanque400,06€/.test(box), box);
+
+    box = await sheet({ edit: 'p1', fields: { 'env-monthly': '300' } });
+    check('bug 1.1: editing active project frees its current mise only', /Tamargeactuelle:799,94€/.test(box) && /resterait499,94€/.test(box), box);
+    await q.close();
+  }
+
   // 6. Rules edit / delete
   {
     const q = await H.open({ storage: clone(demo) });

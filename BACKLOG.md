@@ -7,10 +7,11 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
 
 ## 1. Bugs constatés (P0)
 
-### 1.1 Projet : la marge est faussée pendant la saisie (mode Actif)
+### 1.1 Projet : la marge est faussée pendant la saisie (mode Actif) — ✅ corrigé
 - **Symptôme** : marge réelle 1 500 €. En tapant une mise de 300 €, l'app affiche « Ta marge actuelle : 1 800 € » et « il te resterait 1 500 € » au lieu de 1 200 €. Avec une date et une mise « Auto » de 1 000 €, elle affiche une marge de 2 500 €.
 - **Cause** : dans `updateEnvHint` (feuille enveloppe/projet), `projectPlan(probe, d.free)` ajoute la contribution du projet *en cours de saisie* comme s'il était déjà réservé (`own = projectContribution(probe)`). Il ne faut l'ajouter que pour un projet **existant** qu'on modifie.
 - **En mode Plan c'est juste** (le projet ne réserve rien), ce qui confirme la cause.
+- **Corrigé** : `projectPlan` prend un 3e paramètre `reserved` (ce que le projet bloque déjà). La feuille passe 0 pour un nouveau projet, et la mise **enregistrée** (pas celle en cours de saisie) pour un projet modifié. Tests « bug 1.1 » dans `tests/app.test.js`.
 
 ### 1.2 Scan de ticket : lecture mauvaise sur un vrai ticket (Lagardère / Relay, Avignon)
 - Résultat obtenu : enseigne « a. LAGAROERE TR FRANCE SNC », 1 seul article « can (5) 5.50% 2,27 0,13 — 2,40 € », date du jour. Le total (4,00 €) était juste.
