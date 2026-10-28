@@ -29,11 +29,15 @@ function compare(name, got, want) {
   if ('envelope' in want) check(`${name} : enveloppe ${want.envelope} proposée`, (got.env || '').includes(want.envelope), got.env);
 }
 
-async function scan(H, file) {
+// Scan via l'interface : choix de la photo, recadrage (« Tout lire » ou sélection), lecture.
+async function scan(H, file, { box = null, keep = false } = {}) {
   const p = await H.open({ storage: clone(demo) });
   await p.evaluate(() => window.BudgetFold.actions.openAdd());
   const t0 = Date.now();
   await (await p.$('#scan-file')).uploadFile(file);
+  await p.waitForFunction(() => document.getElementById('dlg-crop').open, { timeout: 10000 });
+  if (box) await p.evaluate((b) => { Object.assign(window.BudgetFold.ui.crop, b); document.getElementById('crop-read').click(); }, box);
+  else await p.evaluate(() => document.getElementById('crop-all').click());
   await p.waitForFunction(() => document.getElementById('scan-status').hidden && (window.BudgetFold.ui.lastScan || !document.getElementById('tx-error').hidden), { timeout: 120000 });
   const got = await p.evaluate(() => ({
     scan: window.BudgetFold.ui.lastScan || { items: [] },
@@ -45,6 +49,7 @@ async function scan(H, file) {
     error: document.getElementById('tx-error').textContent
   }));
   console.log(`  ${path.basename(file)} lu en ${Date.now() - t0} ms`);
+  if (keep) return { got, p };
   await p.close();
   return got;
 }
@@ -76,6 +81,36 @@ async function scan(H, file) {
     compare(name, await scan(H, path.join(TICKETS, f)), JSON.parse(fs.readFileSync(json, 'utf8')));
   }
   console.log(`${synth.length} ticket(s) généré(s), ${photos.length} vraie(s) photo(s).`);
+
+  // Recadrage : sans l'en-tête, l'enseigne disparaît mais le total reste lu.
+  {
+    const { got, p } = await scan(H, path.join(OUT, 'carrefour-market.jpg'), { box: { x0: 0, y0: 0.42, x1: 1, y1: 1 }, keep: true });
+    check('recadrage : total lu sur la partie gardée', got.scan.total === 1182, got.scan);
+    check('recadrage : l\'en-tête coupé n\'est plus lu', got.scan.merchant !== 'Carrefour Market', got.scan.merchant);
+    const proof = await p.evaluate(async () => {
+      const ids = [...document.querySelectorAll('#tx-photos [data-photo]')].map((n) => n.dataset.photo);
+      const rec = ids.length ? await window.BudgetFold.Photos.get(ids[0]) : null;
+      return { n: ids.length, type: rec && rec.type, size: rec && rec.size, w: rec && rec.w, h: rec && rec.h };
+    });
+    check('photo du ticket recadrée gardée comme justificatif (JPEG ≤ 150 Ko, ≤ 1 200 px)', proof.n === 1 && proof.type === 'image/jpeg' && proof.size <= 150 * 1024 && Math.max(proof.w, proof.h) <= 1200, proof);
+    await p.close();
+  }
+
+  // Ticket Relay : « Répartir » propose une ligne par article.
+  {
+    const { got, p } = await scan(H, path.join(OUT, 'relay-avignon.jpg'), { keep: true });
+    await p.evaluate(() => document.getElementById('tx-split-btn').click());
+    const rows = await p.evaluate(() => [...document.querySelectorAll('#tx-split-rows .split-row')].map((r) => [r.querySelector('.split-amount').value, r.querySelector('.split-note').value]));
+    check('répartir après scan : une ligne par article (1,60 € et 2,40 €)', rows.length === 2 && rows[0][0] === '1,60' && rows[1][0] === '2,40' && /expresso/i.test(rows[0][1]), rows);
+    const hint = await p.evaluate(() => document.getElementById('tx-split-hint').textContent);
+    check('répartition complète annoncée', /Tout est réparti/.test(hint), hint);
+    await p.evaluate(() => document.getElementById('tx-form').requestSubmit());
+    await new Promise((r) => setTimeout(r, 500));
+    const txs = await p.evaluate(() => window.BudgetFold.getState().transactions.filter((t) => t.group));
+    check('ticket enregistré en 2 dépenses liées, avec la photo', txs.length === 2 && txs[0].group === txs[1].group && txs.every((t) => t.photos && t.photos.length === 1), txs.length);
+    await p.close();
+    void got;
+  }
 
   done(H);
   await H.close();

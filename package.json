@@ -9,11 +9,12 @@
     "test": "node --check script.js && node tests/run.js",
     "test:app": "node tests/run.js app",
     "test:ocr": "node tests/run.js ocr",
-    "test:fast": "node --check script.js && node tests/run.js app cycle data projects receipts simulation"
+    "test:fast": "node --check script.js && node tests/run.js app cycle data projects proofs receipts simulation"
   },
   "devDependencies": {
     "@tesseract.js-data/fra": "1.0.0",
     "lucide": "0.460.0",
+    "pdfjs-dist": "4.10.38",
     "puppeteer": "24.43.1",
     "puppeteer-core": "24.43.1",
     "tesseract.js": "5.1.1"

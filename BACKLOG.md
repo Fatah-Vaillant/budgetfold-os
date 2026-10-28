@@ -68,7 +68,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
   - Base pour les **optimisations** : enveloppes toujours sous-utilisées ou dépassées, ajustements suggérés.
 - **Esprit des enveloppes** : un plafond à ne pas dépasser, pas un objectif à atteindre. Valoriser « bien tenu » (dépensé moins que prévu) dans le Bilan.
 
-## 4. Tickets et justificatifs (P1)
+## 4. Tickets et justificatifs (P1) — ✅ fait (phase 4)
 
 - **Conserver la photo du ticket** liée à la dépense ou au revenu (utile pour une micro-entreprise).
   - Stockage local en **IndexedDB** : localStorage est limité à environ 5 Mo, trop peu pour des photos.

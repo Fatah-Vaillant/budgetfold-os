@@ -35,13 +35,14 @@ const ROOT = path.resolve(__dirname, '..');
 const NM = path.join(ROOT, 'node_modules');
 const lucideJs = fs.readFileSync(path.join(NM, 'lucide/dist/umd/lucide.min.js'), 'utf8');
 const OCR_NM = NM;
-const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm': 'application/wasm', '.gz': 'application/gzip' };
+const mime = { '.mjs': 'text/javascript', '.pdf': 'application/pdf', '.zip': 'application/zip', '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm': 'application/wasm', '.gz': 'application/gzip' };
 
 function localFor(u) {
   let m;
   if ((m = /tesseract\.js@[^/]+\/dist\/(.+)$/.exec(u))) return `${OCR_NM}/tesseract.js/dist/${m[1]}`;
   if ((m = /tesseract\.js-core@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/tesseract.js-core/${m[1]}`;
   if ((m = /@tesseract\.js-data\/fra@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/@tesseract.js-data/fra/${m[1]}`;
+  if ((m = /pdfjs-dist@[^/]+\/(.+)$/.exec(u))) return `${OCR_NM}/pdfjs-dist/${m[1]}`;
   return null;
 }
 

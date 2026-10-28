@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 4 — Justificatifs, tickets et règles**
+**Phase 5 — Saisie rapide et usage quotidien**
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -87,7 +87,27 @@ Décisions de la phase 3 :
 - Sur l'accueil, toucher un projet ouvre sa fiche (avant : la feuille de modification, toujours accessible via « Modifier »).
 
 ## Phase 4 — Justificatifs, tickets et règles
-_À planifier._
+Plan :
+1. Données v4 : `tx.photos` (identifiants), `tx.pro`, `tx.group` (ticket réparti), `rules[].source` (auto / user), `prefs.pro` (taux et seuils saisis).
+2. Justificatifs dans IndexedDB (`budgetfold-photos`) : photo compressée (JPEG ≤ 1 200 px, ≤ 150 Ko), PDF gardé tel quel ; miniatures, visionneuse (précédent / suivant, remplacer, retirer).
+3. ZIP maison (méthode « stockée », CRC32) : sauvegarde complète avec photos, import .zip, export « justificatifs » (CSV ; + photos) par période.
+4. Micro-entreprise : case « pro », CA du mois et de l'année, cotisations provisionnées dans le reste à vivre, seuils et alertes.
+5. Règles de classement : éditeur (ajout, modification, suppression avec « Annuler »), règles écrites à la main jamais écrasées.
+6. Scan : recadrage avant lecture, ticket réparti entre enveloppes (une ligne par article), facture PDF lue par pdf.js 4.10.38 (version figée, chargé à la demande).
+
+- [x] Photo du ticket conservée (IndexedDB, compressée, miniature, plein écran, remplacer, retirer, plusieurs photos)
+- [x] Exports : sauvegarde complète (zip) ; justificatifs par période (CSV + photos)
+- [x] Mode micro-entreprise (pro/perso, CA mois et année, cotisations au taux saisi, alertes de seuils saisis)
+- [x] Règles de classement modifiables, apprises automatiquement
+- [x] Scan amélioré : recadrage, ticket réparti entre enveloppes, facture PDF
+- [x] npm test vert, vérification 390 / 1280 px, commit
+
+Décisions de la phase 4 :
+- Les photos et PDF vivent dans IndexedDB, jamais dans localStorage ; l'état ne garde que leurs identifiants. Une photo qui n'est plus citée par aucune opération est effacée au démarrage suivant, plus d'un jour après (le temps de pouvoir « Annuler »).
+- Ticket réparti = plusieurs dépenses liées par `group` (chacune compte dans son enveloppe) ; c'est aussi l'« opération répartie » de la phase 5.
+- Micro-entreprise : aucun taux, plafond ou seuil n'est proposé par défaut. Les cotisations sont provisionnées dans le reste à vivre du mois (comme une charge). L'alerte « bientôt atteint » se déclenche à 90 % du seuil saisi.
+- pdf.js est la seule nouvelle dépendance (CDN jsdelivr, version figée 4.10.38, chargée seulement à l'import d'un PDF) ; elle est installée en `devDependencies` pour les tests hors ligne.
+- Le zip est écrit sans bibliothèque ; l'import lit aussi les zip compressés (DecompressionStream).
 
 ## Phase 5 — Saisie rapide et usage quotidien
 _À planifier._

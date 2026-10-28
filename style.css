@@ -4108,3 +4108,258 @@ input[type="month"] {
 #env-more[open] > .field {
   margin-top: 12px;
 }
+
+/* ——— Phase 4 : justificatifs, répartition, recadrage, règles ——— */
+.proofs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.proof {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink-2);
+  background: var(--fill);
+  cursor: pointer;
+}
+
+.proof img,
+.tx-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.proof .lucide {
+  width: 22px;
+  height: 22px;
+}
+
+.proof-add {
+  border-style: dashed;
+  color: var(--navy-1);
+  background: var(--bg);
+}
+
+.proof.is-pdf {
+  color: var(--rose-ink);
+  background: var(--rose-soft);
+}
+
+.tx-thumb {
+  overflow: hidden;
+  padding: 0;
+}
+
+.tag-pro {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--c-teal-ink);
+  background: var(--c-teal-soft);
+}
+
+.split {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+}
+
+.split[hidden],
+#tx-chips[hidden],
+#tx-split-btn[hidden] {
+  display: none;
+}
+
+.split-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.split-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.split-note {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font: inherit;
+  color: var(--ink);
+}
+
+@media (max-width: 560px) {
+  .split-row {
+    grid-template-columns: 110px minmax(0, 1fr) 44px;
+  }
+
+  .split-note {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+.split-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.crop-stage {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: #0f172a;
+  touch-action: none;
+  user-select: none;
+}
+
+.crop-frame {
+  position: relative;
+  line-height: 0;
+}
+
+.crop-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 56vh;
+}
+
+.crop-box {
+  position: absolute;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.55);
+  pointer-events: none;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--emerald);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.crop-handle[data-h="nw"] { left: -16px; top: -16px; }
+.crop-handle[data-h="ne"] { right: -16px; top: -16px; }
+.crop-handle[data-h="sw"] { left: -16px; bottom: -16px; }
+.crop-handle[data-h="se"] { right: -16px; bottom: -16px; }
+
+.photo-view {
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  margin-bottom: 12px;
+}
+
+.photo-view img {
+  max-width: 100%;
+  max-height: 65vh;
+  border-radius: var(--r-md);
+}
+
+#dlg-photo .sheet-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rule-new {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.rule-new > input,
+.rule-edit-key {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font: inherit;
+  color: var(--ink);
+}
+
+.rule-list {
+  display: grid;
+  gap: 8px;
+}
+
+.rule-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rule-if {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+
+.rule-then .lucide {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 560px) {
+  .rule-new {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rule-row {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+
+  .rule-if,
+  .rule-then {
+    display: none;
+  }
+
+  .rule-row .select-wrap {
+    grid-column: 1;
+  }
+
+  .rule-row .tag-planned {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: center;
+  }
+}
+
+#r-pro[hidden] {
+  display: none;
+}
+
+#r-pro .tiles {
+  margin: 12px 0;
+}

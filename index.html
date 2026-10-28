@@ -328,6 +328,7 @@
               <div class="tiles" id="r-tiles"></div>
               <article class="card pad" id="r-bars"></article>
               <article class="card pad" id="r-days"></article>
+              <article class="card pad" id="r-pro" hidden></article>
               <article class="card pad" id="r-notes"></article>
             </div>
             <div id="r-history" hidden></div>
@@ -362,7 +363,7 @@
       <div class="field">
         <div class="field-top">
           <label for="tx-amount">Montant</label>
-          <button type="button" class="scan-btn" id="tx-scan"><i data-lucide="scan-line"></i>Scanner un ticket</button>
+          <button type="button" class="scan-btn" id="tx-scan"><i data-lucide="scan-line"></i>Ticket ou facture</button>
         </div>
         <div class="money-input large">
           <input id="tx-amount" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="0">
@@ -378,8 +379,19 @@
         <input id="tx-label" type="text" maxlength="80" autocomplete="off" placeholder="Courses, loyer, café…">
       </div>
       <div class="field" id="tx-env-field">
-        <span class="field-label" id="tx-env-label">Enveloppe</span>
+        <div class="field-top">
+          <span class="field-label" id="tx-env-label">Enveloppe</span>
+          <button type="button" class="link-btn" id="tx-split-btn"><i data-lucide="split"></i>Répartir</button>
+        </div>
         <div class="chips" id="tx-chips" role="radiogroup" aria-labelledby="tx-env-label"></div>
+      </div>
+      <div class="split" id="tx-split" hidden>
+        <div class="split-rows" id="tx-split-rows"></div>
+        <div class="split-foot">
+          <button type="button" class="link-btn" id="tx-split-add"><i data-lucide="plus"></i>Ajouter une ligne</button>
+          <button type="button" class="link-btn" id="tx-split-off"><i data-lucide="x"></i>Ne pas répartir</button>
+        </div>
+        <p class="hint" id="tx-split-hint"></p>
       </div>
       <label class="check-row" id="tx-covers-field" hidden>
         <input type="checkbox" id="tx-covers">
@@ -414,6 +426,14 @@
         <summary>Détail (articles, remarques)</summary>
         <textarea id="tx-detail" rows="4" maxlength="1500" placeholder="Ex : liste des articles du ticket"></textarea>
       </details>
+      <div class="field" id="tx-proof-field">
+        <span class="field-label" id="tx-proof-label">Justificatifs</span>
+        <div class="proofs" id="tx-photos" aria-labelledby="tx-proof-label"></div>
+      </div>
+      <label class="check-row" id="tx-pro-field" hidden>
+        <input type="checkbox" id="tx-pro">
+        <span><strong>Opération pro</strong><small>Comptée dans ton chiffre d'affaires ou tes frais de micro-entreprise.</small></span>
+      </label>
       <div class="series-note" id="tx-series" hidden>
         <i data-lucide="repeat"></i>
         <span id="tx-series-text"></span>
@@ -574,6 +594,103 @@
       <div class="sheet-actions">
         <button type="button" class="btn ghost" data-close>Annuler</button>
         <button type="submit" class="btn primary" id="env-submit">Créer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-crop" aria-labelledby="crop-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="crop-title">Recadrer le ticket</h2>
+          <p>Fais glisser les coins pour ne garder que le ticket : la lecture est plus fiable.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="crop-stage" id="crop-stage">
+        <div class="crop-frame">
+          <img id="crop-img" alt="Photo du ticket à recadrer">
+          <div class="crop-box" id="crop-box">
+            <span class="crop-handle" data-h="nw" aria-hidden="true"></span>
+            <span class="crop-handle" data-h="ne" aria-hidden="true"></span>
+            <span class="crop-handle" data-h="sw" aria-hidden="true"></span>
+            <span class="crop-handle" data-h="se" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="crop-all">Tout lire</button>
+        <button type="button" class="btn primary" id="crop-read">Lire la sélection</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-photo" aria-labelledby="photo-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="photo-title">Justificatif</h2>
+          <p id="photo-sub"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="photo-view" id="photo-view"></div>
+      <div class="sheet-actions three">
+        <button type="button" class="btn ghost" id="photo-prev"><i data-lucide="chevron-left"></i>Précédent</button>
+        <button type="button" class="btn ghost" id="photo-replace"><i data-lucide="replace"></i>Remplacer</button>
+        <button type="button" class="btn ghost danger-text" id="photo-delete"><i data-lucide="trash-2"></i>Retirer</button>
+        <button type="button" class="btn ghost" id="photo-next">Suivant<i data-lucide="chevron-right"></i></button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet wide" id="dlg-rules" aria-labelledby="rules-title">
+    <div class="sheet-body">
+      <header class="sheet-head">
+        <div>
+          <h2 id="rules-title">Règles de classement</h2>
+          <p>« Si le libellé contient… alors enveloppe… ». BudgetFold en apprend en te regardant classer ; tu peux tout modifier.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <form class="rule-new" id="rule-form" novalidate>
+        <input id="rule-key" type="text" maxlength="40" autocomplete="off" placeholder="Le libellé contient… (ex : carrefour)" aria-label="Le libellé contient">
+        <div class="select-wrap"><select id="rule-env" aria-label="Enveloppe"></select></div>
+        <button type="submit" class="btn primary compact"><i data-lucide="plus"></i>Ajouter</button>
+      </form>
+      <p class="field-error" id="rule-error" role="alert" hidden></p>
+      <div class="rule-list" id="rule-list"></div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="dlg-proofs" aria-labelledby="proofs-title">
+    <form id="proofs-form" novalidate>
+      <header class="sheet-head">
+        <div>
+          <h2 id="proofs-title">Exporter les justificatifs</h2>
+          <p>Un fichier .zip avec un tableau (CSV) et les photos, pour ta comptabilité.</p>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Fermer"><i data-lucide="x"></i></button>
+      </header>
+      <div class="field-row">
+        <div class="field">
+          <label for="proofs-from">Du</label>
+          <input id="proofs-from" type="date">
+        </div>
+        <div class="field">
+          <label for="proofs-to">Au</label>
+          <input id="proofs-to" type="date">
+        </div>
+      </div>
+      <label class="check-row" id="proofs-pro-field">
+        <input type="checkbox" id="proofs-pro">
+        <span><strong>Seulement les opérations pro</strong><small>Pour la déclaration de micro-entreprise.</small></span>
+      </label>
+      <p class="hint" id="proofs-hint"></p>
+      <p class="field-error" id="proofs-error" role="alert" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Exporter</button>
       </div>
     </form>
   </dialog>
@@ -768,6 +885,28 @@
         </div>
         <p class="hint small-hint">Tes enveloppes, ton reste à vivre et tes bilans suivent ce cycle. Les enveloppes au mois repartent à zéro automatiquement à chaque début de cycle.</p>
       </div>
+      <details class="detail-box" id="set-pro-box">
+        <summary>Micro-entreprise (facultatif)</summary>
+        <label class="check-row">
+          <input type="checkbox" id="set-pro">
+          <span><strong>Activer le mode micro-entreprise</strong><small>Étiquette pro ou perso sur chaque opération, chiffre d'affaires, cotisations mises de côté.</small></span>
+        </label>
+        <div class="field-row">
+          <div class="field">
+            <label for="set-pro-rate">Taux de cotisations (%)</label>
+            <input id="set-pro-rate" type="text" inputmode="decimal" autocomplete="off" placeholder="Ton taux URSSAF">
+          </div>
+          <div class="field">
+            <label for="set-pro-ceiling">Plafond de chiffre d'affaires (€/an)</label>
+            <div class="money-input"><input id="set-pro-ceiling" type="text" inputmode="decimal" autocomplete="off" placeholder="Facultatif"><span>€</span></div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="set-pro-vat">Seuil de franchise de TVA (€/an)</label>
+          <div class="money-input"><input id="set-pro-vat" type="text" inputmode="decimal" autocomplete="off" placeholder="Facultatif"><span>€</span></div>
+        </div>
+        <p class="hint small-hint">Saisis les valeurs de ta situation (elles changent selon l'activité et l'année) : BudgetFold n'en suppose aucune.</p>
+      </details>
       <label class="check-row">
         <input type="checkbox" id="set-auto-close">
         <span><strong>Clôturer les mois automatiquement</strong><small>Avec tes derniers choix (reporter, remettre au budget ou épargner), sans ouvrir l'assistant.</small></span>
@@ -885,15 +1024,33 @@
           </button>
         </li>
         <li>
+          <button type="button" class="menu-item" id="menu-rules">
+            <span class="menu-ico"><i data-lucide="list-checks"></i></span>
+            <span><strong>Règles de classement</strong><small>Libellé → enveloppe, modifiables</small></span>
+          </button>
+        </li>
+        <li>
           <button type="button" class="menu-item" id="menu-export">
             <span class="menu-ico"><i data-lucide="download"></i></span>
-            <span><strong>Exporter mes données</strong><small>Sauvegarde au format JSON</small></span>
+            <span><strong>Exporter mes données</strong><small>Sauvegarde au format JSON (sans photos)</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-backup">
+            <span class="menu-ico"><i data-lucide="archive"></i></span>
+            <span><strong>Sauvegarde complète</strong><small>Données et photos des justificatifs (.zip)</small></span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="menu-item" id="menu-proofs">
+            <span class="menu-ico"><i data-lucide="file-archive"></i></span>
+            <span><strong>Exporter les justificatifs</strong><small>Tableau + photos d'une période, pour la comptabilité</small></span>
           </button>
         </li>
         <li>
           <button type="button" class="menu-item" id="menu-import">
             <span class="menu-ico"><i data-lucide="upload"></i></span>
-            <span><strong>Importer une sauvegarde</strong><small>Remplace les données actuelles</small></span>
+            <span><strong>Importer une sauvegarde</strong><small>Fichier .json ou .zip, remplace les données actuelles</small></span>
           </button>
         </li>
         <li>
@@ -907,9 +1064,11 @@
     </div>
   </dialog>
 
-  <input type="file" id="import-file" accept="application/json,.json" hidden>
+  <input type="file" id="import-file" accept="application/json,.json,application/zip,.zip" hidden>
+  <input type="file" id="photo-file" accept="image/*,application/pdf" multiple hidden>
+  <input type="file" id="photo-replace-file" accept="image/*,application/pdf" hidden>
   <input type="file" id="csv-file" accept=".csv,.txt,text/csv,text/plain" hidden>
-  <input type="file" id="scan-file" accept="image/*" hidden>
+  <input type="file" id="scan-file" accept="image/*,application/pdf" hidden>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>

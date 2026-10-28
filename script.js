@@ -269,7 +269,9 @@
     closings: [],
     prefs: {
       onboarded: false, lastEnvId: null, since: clock.today(), lastExport: null, cycle: 'pay', safetyCreated: false,
-      closing: { env: 'keep', free: 'budget', projectId: null, auto: false }
+      closing: { env: 'keep', free: 'budget', projectId: null, auto: false },
+      // Micro-entreprise : taux de cotisations et seuils saisis par l'utilisateur (aucune valeur par défaut).
+      pro: { enabled: false, rateBp: 0, ceiling: null, vatThreshold: null }
     }
   });
   const CLOSE_ACTIONS = ['keep', 'budget', 'project'];
@@ -378,6 +380,10 @@
       if (detail) tx.detail = detail;
       if (typeof t.recId === 'string' && t.recId) tx.recId = t.recId;
       if (type === 'deposit' && isMonthKey(t.covers)) tx.covers = t.covers;
+      const photos = arr(t.photos).filter((p) => typeof p === 'string' && /^[\w-]{6,64}$/.test(p)).slice(0, 20);
+      if (photos.length) tx.photos = photos;
+      if (t.pro === true) tx.pro = true;
+      if (typeof t.group === 'string' && t.group) tx.group = t.group.slice(0, 64);
       if (type === 'deposit' && t.src === 'close' && isMonthKey(t.closeKey)) Object.assign(tx, { src: 'close', closeKey: t.closeKey });
       if (typeof t.ref === 'string' && t.ref) tx.ref = t.ref.slice(0, 120);
       s.transactions.push(tx);
@@ -385,7 +391,7 @@
 
     for (const r of arr(raw.rules)) {
       if (!r || typeof r.key !== 'string' || r.key.length < 3 || !envIds.has(r.envId)) continue;
-      if (!s.rules.some((x) => x.key === r.key)) s.rules.push({ key: r.key.slice(0, 40), envId: r.envId });
+      if (!s.rules.some((x) => x.key === r.key)) s.rules.push({ key: r.key.slice(0, 40), envId: r.envId, source: r.source === 'user' ? 'user' : 'auto' });
     }
     s.rules = s.rules.slice(-300);
 
@@ -404,6 +410,9 @@
       auto: Boolean(rc.auto)
     };
     if (isMonthKey(raw.lastClosed)) s.lastClosed = raw.lastClosed;
+    const pro = rp.pro || {};
+    const optCents = (v) => (v === null || v === undefined || v === '' ? null : toCents(v) || null);
+    s.prefs.pro = { enabled: Boolean(pro.enabled), rateBp: clampInt(pro.rateBp, 0, 10000, 0), ceiling: optCents(pro.ceiling), vatThreshold: optCents(pro.vatThreshold) };
 
     const spendIds = new Set(s.envelopes.filter((e) => e.kind === 'spend').map((e) => e.id));
     const endpoint = (v) => v === 'free' || spendIds.has(v);
@@ -835,9 +844,13 @@
     const projects = state.envelopes.filter((e) => e.kind === 'project');
     const projectsMonthly = projects.reduce((s, e) => s + projectContribution(e, key), 0);
 
-    const allocated = charges + envAlloc + projectsMonthly + orphan + deposits;
+    // Micro-entreprise : cotisations provisionnées sur le chiffre d'affaires du mois (taux saisi par l'utilisateur).
+    const pro = state.prefs.pro;
+    const proIncome = pro.enabled ? state.transactions.reduce((s, t) => s + (t.type === 'income' && t.pro && t.date >= ms && t.date <= me ? t.amount : 0), 0) : 0;
+    const provision = pro.enabled ? Math.round((proIncome * pro.rateBp) / 10000) : 0;
+    const allocated = charges + envAlloc + projectsMonthly + orphan + deposits + provision;
     return {
-      key, isCurrent, isFuture: key > cm, isPast: key < cm,
+      key, isCurrent, isFuture: key > cm, isPast: key < cm, proIncome, provision,
       income, salary: state.salary, extraIncome, incomeUpcoming, carried,
       charges, spend, envAlloc, remaining, projectsMonthly, deposits, orphan,
       spentToDate, upcoming, plannedItems, allocated, free: income - allocated
@@ -1174,6 +1187,13 @@
 
     if (d.orphan > 0) {
       push('info', 'info', 'Hors enveloppe', `${money(d.orphan)} ce mois-ci, pris sur ton reste à vivre.`, 'journal');
+    }
+
+    if (state.prefs.pro.enabled && d.isCurrent) {
+      for (const t of proThresholds(today.slice(0, 4))) {
+        if (t.ratio >= 1) push('bad', 'briefcase', `${t.label} dépassé`, `Ton chiffre d'affaires ${today.slice(0, 4)} (${money(t.ca)}) dépasse ${money(t.limit)}. Vérifie ta situation auprès de l'URSSAF.`, 'report');
+        else if (t.ratio >= 0.9) push('warn', 'briefcase', `${t.label} bientôt atteint`, `${money(t.ca)} sur ${money(t.limit)} cette année (${Math.round(t.ratio * 100)} %).`, 'report');
+      }
     }
 
     const order = { bad: 0, warn: 1, info: 2, ok: 3 };
@@ -1615,10 +1635,12 @@
     env.saved = Math.max(0, env.saved + sign * delta);
   }
 
-  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false }, { silent = false } = {}) {
+  function addTransaction({ type, envId = null, amount, note = '', date, ref, detail, recId, covers = false, pro = false, photos = null }, { silent = false } = {}) {
     const t = { id: uid(), type, envId: type === 'income' ? null : envId || null, amount, note: cleanNote(note), date, ts: clock.now() };
     const check = validateTx(t, null);
     if (!check.ok) return check;
+    if (pro && (type === 'income' || type === 'expense')) t.pro = true;
+    if (photos && photos.length) t.photos = photos.slice(0, 20);
     if (type === 'deposit' && covers) t.covers = budgetKey(date);
     const dt = cleanDetail(detail);
     if (dt) t.detail = dt;
@@ -1640,6 +1662,14 @@
     if (!check.ok) return check;
     applySaved(tx, -1);
     Object.assign(tx, { type: next.type, envId: next.envId || null, amount: next.amount, date: next.date, note: cleanNote(next.note) });
+    if (patch.pro !== undefined) {
+      if (patch.pro && (tx.type === 'income' || tx.type === 'expense')) tx.pro = true;
+      else delete tx.pro;
+    }
+    if (patch.photos !== undefined) {
+      if (patch.photos && patch.photos.length) tx.photos = patch.photos.slice(0, 20);
+      else delete tx.photos;
+    }
     if (tx.type === 'deposit' && next.covers) tx.covers = budgetKey(tx.date);
     else delete tx.covers;
     const dt = cleanDetail(next.detail);
@@ -1695,9 +1725,64 @@
     const key = labelKey(label);
     if (key.length < 3 || !findEnv(envId)) return;
     const existing = state.rules.find((r) => r.key === key);
+    if (existing && existing.source === 'user') return;
     if (existing) existing.envId = envId;
-    else state.rules.push({ key, envId });
+    else state.rules.push({ key, envId, source: 'auto' });
     state.rules = state.rules.slice(-300);
+  }
+
+  // Règles de classement modifiables : « si le libellé contient X, alors enveloppe Y ».
+  function saveCatRule({ key, envId, previous = null }) {
+    const k = normText(cleanText(key, 40)).trim();
+    if (k.length < 3) return fail('Écris au moins 3 lettres (ex : carrefour).');
+    if (!spendEnv(envId)) return fail('Choisis une enveloppe.');
+    if (previous !== k && state.rules.some((r) => r.key === k)) return fail(`Une règle pour « ${k} » existe déjà.`);
+    const rule = previous !== null && state.rules.find((r) => r.key === previous);
+    if (rule) Object.assign(rule, { key: k, envId, source: 'user' });
+    else state.rules.unshift({ key: k, envId, source: 'user' });
+    commit();
+    return ok({ key: k, envId });
+  }
+
+  function deleteCatRule(key) {
+    const i = state.rules.findIndex((r) => r.key === key);
+    if (i === -1) return fail('Règle introuvable.');
+    const [rule] = state.rules.splice(i, 1);
+    commit();
+    return ok({ rule, index: i });
+  }
+
+  function setProSettings({ enabled, rateBp, ceiling, vatThreshold }) {
+    if (rateBp === null || rateBp < 0 || rateBp > 10000) return fail('Indique un taux de cotisations valide (ex : 24,6).');
+    if (ceiling === undefined || vatThreshold === undefined) return fail('Indique des seuils valides, ou laisse les champs vides.');
+    state.prefs.pro = { enabled: Boolean(enabled), rateBp, ceiling, vatThreshold };
+    commit();
+    return ok(state.prefs.pro);
+  }
+
+  // Chiffre d'affaires pro d'une année civile (les seuils micro-entreprise sont annuels).
+  const proRevenue = (year) => state.transactions.reduce((s, t) => s + (t.type === 'income' && t.pro && t.date.startsWith(year) ? t.amount : 0), 0);
+
+  // Opération répartie : un ticket, plusieurs enveloppes. Chaque part est une dépense liée aux autres (`group`).
+  function addSplit(base, parts) {
+    const clean = parts.filter((p) => p.amount > 0);
+    if (clean.length < 2) return fail('Répartis au moins deux montants.');
+    for (const p of clean) {
+      const check = validateTx({ type: 'expense', envId: p.envId || null, amount: p.amount, date: base.date }, null);
+      if (!check.ok) return check;
+    }
+    const group = uid();
+    const txs = clean.map((p) => {
+      const t = { id: uid(), type: 'expense', envId: p.envId || null, amount: p.amount, note: cleanNote(p.note || base.note), date: base.date, ts: clock.now(), group };
+      const dt = cleanDetail(base.detail);
+      if (dt) t.detail = dt;
+      if (base.pro) t.pro = true;
+      state.transactions.push(t);
+      if (t.envId && base.note) learnRule(p.note || base.note, t.envId);
+      return t;
+    });
+    commit();
+    return ok({ group, txs });
   }
 
   function guessEnvelope(label, { hints = true } = {}) {
@@ -2058,6 +2143,280 @@
     return [head, ...r.items.map((it) => `• ${it.label} — ${money(Math.abs(it.amount)).replace(/ | /g, ' ')}${it.amount < 0 ? ' (remise)' : ''}`)].join('\n');
   }
 
+  // ——— Justificatifs : photos et PDF dans IndexedDB (localStorage est limité à ~5 Mo) ———
+  const PHOTO_DB = 'budgetfold-photos';
+  const PHOTO_MAX = 1200;
+  const PHOTO_TARGET = 150 * 1024;
+  let photoDb = null;
+  function openPhotoDb() {
+    if (!photoDb) {
+      photoDb = new Promise((resolve, reject) => {
+        if (!window.indexedDB) return reject(new Error('indexeddb'));
+        const req = indexedDB.open(PHOTO_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('photos', { keyPath: 'id' });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }).catch((err) => { photoDb = null; throw err; });
+    }
+    return photoDb;
+  }
+  async function photoStore(mode, run) {
+    const db = await openPhotoDb();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction('photos', mode);
+      const req = run(t.objectStore('photos'));
+      t.oncomplete = () => resolve(req ? req.result : undefined);
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error);
+    });
+  }
+  const Photos = {
+    put: (rec) => photoStore('readwrite', (st) => st.put(rec)),
+    get: (id) => photoStore('readonly', (st) => st.get(id)),
+    del: (id) => photoStore('readwrite', (st) => st.delete(id)),
+    all: () => photoStore('readonly', (st) => st.getAll())
+  };
+  const photoUrls = new Map();
+  async function photoUrl(id) {
+    if (photoUrls.has(id)) return photoUrls.get(id);
+    const rec = await Photos.get(id).catch(() => null);
+    if (!rec) return null;
+    const url = URL.createObjectURL(rec.blob);
+    photoUrls.set(id, url);
+    return url;
+  }
+
+  const canvasBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  async function loadImage(src) {
+    const url = src instanceof Blob ? URL.createObjectURL(src) : null;
+    try {
+      return await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = url || src;
+      });
+    } finally {
+      if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  }
+
+  // Photo compressée : JPEG d'environ 1 200 px et 150 Ko, qualité baissée pas à pas si besoin.
+  async function compressPhoto(source) {
+    const img = source instanceof HTMLCanvasElement ? source : await loadImage(source);
+    const w0 = img.naturalWidth || img.width;
+    const h0 = img.naturalHeight || img.height;
+    const scale = Math.min(1, PHOTO_MAX / Math.max(w0, h0));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w0 * scale));
+    canvas.height = Math.max(1, Math.round(h0 * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    let blob = null;
+    for (const q of [0.82, 0.72, 0.62, 0.52, 0.42]) {
+      blob = await canvasBlob(canvas, 'image/jpeg', q);
+      if (blob && blob.size <= PHOTO_TARGET) break;
+    }
+    return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
+  }
+
+  async function savePhoto(file) {
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    const data = isPdf ? { blob: file, type: 'application/pdf', w: 0, h: 0 } : await compressPhoto(file);
+    const rec = { id: uid(), ...data, size: data.blob.size, name: cleanText(file.name || '', 80), createdAt: clock.now() };
+    await Photos.put(rec);
+    return rec;
+  }
+
+  // Ménage au démarrage : une photo que plus aucune opération ne cite (suppression confirmée lors d'une séance précédente).
+  async function cleanupPhotos() {
+    try {
+      const used = new Set(state.transactions.flatMap((t) => t.photos || []));
+      for (const rec of await Photos.all()) if (!used.has(rec.id) && clock.now() - rec.createdAt > 86400000) await Photos.del(rec.id);
+    } catch { /* IndexedDB indisponible */ }
+  }
+
+  // ——— ZIP sans dépendance (méthode « stockée » : les JPEG sont déjà compressés) ———
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function makeZip(files) {
+    const enc = new TextEncoder();
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+    const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    for (const f of files) {
+      const name = enc.encode(f.name);
+      const data = f.data instanceof Uint8Array ? f.data : enc.encode(String(f.data));
+      const crc = crc32(data);
+      const head = new DataView(new ArrayBuffer(30));
+      head.setUint32(0, 0x04034b50, true);
+      head.setUint16(4, 20, true);
+      head.setUint16(6, 0x0800, true);
+      head.setUint16(8, 0, true);
+      head.setUint16(10, dosTime, true);
+      head.setUint16(12, dosDate, true);
+      head.setUint32(14, crc, true);
+      head.setUint32(18, data.length, true);
+      head.setUint32(22, data.length, true);
+      head.setUint16(26, name.length, true);
+      chunks.push(new Uint8Array(head.buffer), name, data);
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 0x02014b50, true);
+      cd.setUint16(4, 20, true);
+      cd.setUint16(6, 20, true);
+      cd.setUint16(8, 0x0800, true);
+      cd.setUint16(12, dosTime, true);
+      cd.setUint16(14, dosDate, true);
+      cd.setUint32(16, crc, true);
+      cd.setUint32(20, data.length, true);
+      cd.setUint32(24, data.length, true);
+      cd.setUint16(28, name.length, true);
+      cd.setUint32(42, offset, true);
+      central.push(new Uint8Array(cd.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const size = central.reduce((s, c) => s + c.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, size, true);
+    end.setUint32(16, offset, true);
+    return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+  }
+  async function readZip(buffer) {
+    const v = new DataView(buffer);
+    let e = buffer.byteLength - 22;
+    while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+    if (e < 0) throw new Error('zip');
+    const count = v.getUint16(e + 10, true);
+    let p = v.getUint32(e + 16, true);
+    const dec = new TextDecoder();
+    const out = new Map();
+    for (let i = 0; i < count; i++) {
+      if (v.getUint32(p, true) !== 0x02014b50) throw new Error('zip');
+      const method = v.getUint16(p + 10, true);
+      const csize = v.getUint32(p + 20, true);
+      const nlen = v.getUint16(p + 28, true);
+      const xlen = v.getUint16(p + 30, true);
+      const clen = v.getUint16(p + 32, true);
+      const local = v.getUint32(p + 42, true);
+      const name = dec.decode(new Uint8Array(buffer, p + 46, nlen));
+      const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+      let data = new Uint8Array(buffer.slice(start, start + csize));
+      if (method === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      else if (method !== 0) throw new Error('zip');
+      out.set(name, data);
+      p += 46 + nlen + xlen + clen;
+    }
+    return out;
+  }
+
+  function download(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  const photoExt = (rec) => (rec.type === 'application/pdf' ? 'pdf' : 'jpg');
+  async function photoFiles(ids, naming) {
+    const files = [];
+    for (const [i, id] of ids.entries()) {
+      const rec = await Photos.get(id).catch(() => null);
+      if (rec) files.push({ name: naming(rec, i), data: new Uint8Array(await rec.blob.arrayBuffer()), id });
+    }
+    return files;
+  }
+
+  // Sauvegarde complète : budgetfold.json + photos/ (zip).
+  async function fullBackupZip() {
+    const ids = [...new Set(state.transactions.flatMap((t) => t.photos || []))];
+    const photos = await photoFiles(ids, (rec) => `photos/${rec.id}.${photoExt(rec)}`);
+    const meta = Object.fromEntries((await Promise.all(ids.map((id) => Photos.get(id).catch(() => null)))).filter(Boolean).map((r) => [r.id, { type: r.type, w: r.w, h: r.h, name: r.name, createdAt: r.createdAt }]));
+    const payload = { app: 'BudgetFold OS', exportedAt: new Date().toISOString(), unit: 'centimes', photos: meta, ...state };
+    return makeZip([{ name: 'budgetfold.json', data: JSON.stringify(payload, null, 2) }, ...photos.map(({ name, data }) => ({ name, data }))]);
+  }
+
+  const csvCell = (v) => {
+    const s = String(v ?? '');
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const centsText = (c) => `${c < 0 ? '-' : ''}${Math.floor(Math.abs(c) / 100)},${pad(Math.abs(c) % 100)}`;
+  const slug = (s) => normText(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'operation';
+
+  // Export « justificatifs » d'une période : CSV (séparateur ;) + photos nommées par date, pour la comptabilité.
+  async function proofsZip({ from, to, proOnly = false }) {
+    const txs = state.transactions
+      .filter((t) => (t.type === 'expense' || t.type === 'income') && t.date >= from && t.date <= to && (!proOnly || t.pro))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.ts - b.ts));
+    const rows = [['Date', 'Libellé', 'Montant (€)', 'Type', 'Enveloppe', 'Pro', 'Justificatifs'].join(';')];
+    const files = [];
+    for (const t of txs) {
+      const names = [];
+      for (const [i, id] of (t.photos || []).entries()) {
+        const rec = await Photos.get(id).catch(() => null);
+        if (!rec) continue;
+        const name = `justificatifs/${t.date}_${slug(t.note || 'operation')}_${t.id.slice(0, 6)}${i ? `_${i + 1}` : ''}.${photoExt(rec)}`;
+        names.push(name.replace('justificatifs/', ''));
+        files.push({ name, data: new Uint8Array(await rec.blob.arrayBuffer()) });
+      }
+      const env = findEnv(t.envId);
+      rows.push([t.date, t.note || '', centsText(t.type === 'expense' ? -t.amount : t.amount), t.type === 'income' ? 'Revenu' : 'Dépense', env ? env.name : '', t.pro ? 'pro' : 'perso', names.join(' ')].map(csvCell).join(';'));
+    }
+    const csv = `﻿${rows.join('\r\n')}\r\n`;
+    return { blob: makeZip([{ name: 'justificatifs.csv', data: csv }, ...files]), count: txs.length, photos: files.length };
+  }
+
+  // Facture PDF : lecture du texte (pdf.js chargé à la demande, version figée), puis même analyse qu'un ticket.
+  const PDFJS = {
+    lib: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs',
+    worker: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs'
+  };
+  let pdfLib = null;
+  async function pdfText(file) {
+    if (!pdfLib) {
+      pdfLib = await import(PDFJS.lib);
+      pdfLib.GlobalWorkerOptions.workerSrc = PDFJS.worker;
+    }
+    const doc = await pdfLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+    const pages = [];
+    for (let n = 1; n <= Math.min(doc.numPages, 10); n++) {
+      const content = await (await doc.getPage(n)).getTextContent();
+      const lines = new Map();
+      for (const it of content.items) {
+        if (!it.str || !it.str.trim()) continue;
+        const y = Math.round(it.transform[5]);
+        const key = [...lines.keys()].find((k) => Math.abs(k - y) <= 2) ?? y;
+        if (!lines.has(key)) lines.set(key, []);
+        lines.get(key).push({ x: it.transform[4], s: it.str });
+      }
+      pages.push([...lines.entries()].sort((a, b) => b[0] - a[0]).map(([, parts]) => parts.sort((a, b) => a.x - b.x).map((q) => q.s).join(' ')).join('\n'));
+    }
+    return pages.join('\n');
+  }
+
   const TESS = {
     script: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
     worker: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
@@ -2099,37 +2458,28 @@
     return OCR.loading;
   }
 
-  async function prepareImage(file) {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await new Promise((resolve, reject) => {
-        const i = new Image();
-        i.onload = () => resolve(i);
-        i.onerror = reject;
-        i.src = url;
-      });
-      const w0 = img.naturalWidth || img.width;
-      const h0 = img.naturalHeight || img.height;
-      const scale = Math.min(2200 / Math.max(w0, h0), Math.max(1, 1300 / w0));
-      const w = Math.round(w0 * scale);
-      const hgt = Math.round(h0 * scale);
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = hgt;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0, w, hgt);
-      const data = ctx.getImageData(0, 0, w, hgt);
-      const px = data.data;
-      for (let i = 0; i < px.length; i += 4) {
-        const g = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-        const v = Math.max(0, Math.min(255, (g - 128) * 1.4 + 140));
-        px[i] = px[i + 1] = px[i + 2] = v;
-      }
-      ctx.putImageData(data, 0, 0);
-      return canvas;
-    } finally {
-      URL.revokeObjectURL(url);
+  // Image prête pour l'OCR : agrandie si besoin, en niveaux de gris contrastés. Accepte une photo ou une découpe (canvas).
+  async function prepareImage(source) {
+    const img = source instanceof HTMLCanvasElement ? source : await loadImage(source);
+    const w0 = img.naturalWidth || img.width;
+    const h0 = img.naturalHeight || img.height;
+    const scale = Math.min(2200 / Math.max(w0, h0), Math.max(1, 1300 / w0));
+    const w = Math.round(w0 * scale);
+    const hgt = Math.round(h0 * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = hgt;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, hgt);
+    const data = ctx.getImageData(0, 0, w, hgt);
+    const px = data.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const g = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+      const v = Math.max(0, Math.min(255, (g - 128) * 1.4 + 140));
+      px[i] = px[i + 1] = px[i + 2] = v;
     }
+    ctx.putImageData(data, 0, 0);
+    return canvas;
   }
 
   async function scanReceipt(file, onProgress) {
@@ -2163,7 +2513,12 @@
     'pj-deposit', 'pj-withdraw', 'pj-buy', 'pj-edit', 'pj-withdraw-form', 'pj-withdraw-amount', 'pj-withdraw-note', 'pj-error',
     'pj-results', 'pj-sim-section', 'sim-prudent', 'sim-real', 'sim-ambitious', 'sim-yield', 'sim-inflation', 'sim-raise',
     'sim-raise-from', 'sim-compare', 'sim-error', 'sim-out', 'sim-chart', 'pj-notes', 'pj-check-form', 'pj-check-input',
-    'pj-checklist', 'pj-history', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
+    'pj-checklist', 'pj-history', 'tx-split-btn', 'tx-split', 'tx-split-rows', 'tx-split-add', 'tx-split-off', 'tx-split-hint',
+    'tx-proof-field', 'tx-photos', 'tx-pro-field', 'tx-pro', 'dlg-crop', 'crop-stage', 'crop-img', 'crop-box', 'crop-all', 'crop-read',
+    'dlg-photo', 'photo-sub', 'photo-view', 'photo-prev', 'photo-replace', 'photo-delete', 'photo-next', 'dlg-rules', 'rule-form',
+    'rule-key', 'rule-env', 'rule-error', 'rule-list', 'dlg-proofs', 'proofs-form', 'proofs-from', 'proofs-to', 'proofs-pro-field',
+    'proofs-pro', 'proofs-hint', 'proofs-error', 'set-pro-box', 'set-pro', 'set-pro-rate', 'set-pro-ceiling', 'set-pro-vat',
+    'menu-rules', 'menu-backup', 'menu-proofs', 'r-pro', 'photo-file', 'photo-replace-file', 'env-plan', 'env-hint', 'env-error', 'env-extra', 'env-reset',
     'env-delete', 'env-submit', 'dlg-settings', 'set-form', 'set-day', 'set-opening', 'set-error', 'dlg-confirm',
     'confirm-title', 'confirm-text', 'confirm-ok', 'dlg-menu', 'open-menu', 'menu-install', 'menu-csv', 'menu-export',
     'menu-import', 'menu-settings', 'menu-wipe', 'import-file', 'csv-file', 'scan-file', 'dlg-import', 'imp-summary',
@@ -2579,6 +2934,8 @@
       const n = t.detail.split('\n').filter((l) => l.startsWith('•')).length;
       bits.push(n ? `${n} ${plural(n, 'article', 'articles')}` : 'détail');
     }
+    if (t.group) bits.push('ticket réparti');
+    if (t.photos && t.photos.length) bits.push(`${t.photos.length} ${plural(t.photos.length, 'justificatif', 'justificatifs')}`);
     return bits.join(' · ');
   }
 
@@ -2587,8 +2944,10 @@
     const title = t.note || (t.type === 'income' ? 'Revenu' : t.type === 'deposit' ? 'Versement' : t.type === 'withdraw' ? 'Retrait' : env ? env.name : 'Dépense');
     const planned = t.date > clock.today();
     return h('button', { type: 'button', class: 'tx-row', dataset: { id: t.id, type: t.type, orphan: String(t.type === 'expense' && !env && !t.recId), planned: String(planned) } },
-      h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
-      h('span', { class: 'tx-body' }, h('strong', {}, title, planned ? h('em', { class: 'tag-planned', text: 'Prévu' }) : null), h('small', { text: txSub(t) })),
+      t.photos && t.photos.length
+        ? h('span', { class: 'tx-icon tx-thumb', 'aria-hidden': 'true', dataset: { photo: t.photos[0] } }, icon('paperclip'))
+        : h('span', { class: 'tx-icon', 'aria-hidden': 'true' }, icon(txIcon(t))),
+      h('span', { class: 'tx-body' }, h('strong', {}, title, planned ? h('em', { class: 'tag-planned', text: 'Prévu' }) : null, t.pro ? h('em', { class: 'tag-pro', text: 'Pro' }) : null), h('small', { text: txSub(t) })),
       h('span', { class: 'tx-amount', text: `${t.type === 'income' ? '+' : '−'}${money(t.amount)}` }));
   }
 
@@ -2665,6 +3024,7 @@
     }));
     els.jEmpty.hidden = rows.length > 0;
     flushIcons();
+    hydrateThumbs(els.jList);
   }
 
   function chartSvg(cash) {
@@ -2913,6 +3273,7 @@
         ? 'Tu dépenses autant que le mois précédent à la même date.'
         : `Tu dépenses ${Math.abs(delta)} % ${delta > 0 ? 'de plus' : 'de moins'} que le mois précédent à la même date.`]);
     }
+    renderProCard(d, key);
     if (saved > 0 && d.income > 0) notes.push(['piggy-bank', `Tu mets de côté ${Math.round((saved / d.income) * 100)} % de tes revenus.`]);
     if (d.orphan > 0) notes.push(['info', `${money(d.orphan)} dépensés hors enveloppe : pense à les ranger.`]);
     fill(els.rNotes,
@@ -2997,7 +3358,10 @@
     try { fn(event); } finally { setTimeout(() => { busy = false; }, 350); }
   };
 
-  const txUi = { mode: 'expense', txId: null, ruleId: null, envId: null, projectId: null, envTouched: false, suggested: false, scanning: false, coversTouched: false };
+  const txUi = {
+    mode: 'expense', txId: null, ruleId: null, envId: null, projectId: null, envTouched: false, suggested: false, scanning: false, coversTouched: false,
+    photos: [], items: [], split: { on: false, rows: [] }
+  };
 
   const sheetDate = () => (isISO(els.txDate.value) ? els.txDate.value : clock.today());
   const sheetRepeat = () => (txUi.mode === 'deposit' || txUi.txId ? 'once' : els.txRepeat.value);
@@ -3143,6 +3507,14 @@
     els.txLabelTitle.textContent = txUi.mode === 'income' ? 'De quoi ?' : isDeposit ? 'Note (facultatif)' : 'Quoi ?';
     els.txLabel.placeholder = txUi.mode === 'income' ? 'Salaire, APL, bourse, vente…' : isDeposit ? 'Ex : prime, anniversaire…' : 'Courses, loyer, café…';
     els.txDetailBox.hidden = isDeposit;
+    els.txProofField.hidden = isDeposit || editingRule;
+    els.txProField.hidden = !state.prefs.pro.enabled || isDeposit || editingRule;
+    const canSplit = txUi.mode === 'expense' && !editingTx && !editingRule && repeat === 'once';
+    els.txSplitBtn.hidden = !canSplit || txUi.split.on;
+    if (!canSplit && txUi.split.on) {
+      txUi.split.on = false;
+      renderSplit();
+    }
     const future = sheetDate() > clock.today();
     els.txSubmit.textContent = editingTx || editingRule
       ? 'Enregistrer'
@@ -3166,7 +3538,10 @@
   }
 
   function openAdd({ mode = 'expense', date = null, envId, projectId = null } = {}) {
-    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId, coversTouched: false });
+    Object.assign(txUi, { mode, txId: null, ruleId: null, envTouched: envId !== undefined, suggested: false, projectId, coversTouched: false, photos: [], items: [], split: { on: false, rows: [] } });
+    els.txPro.checked = false;
+    renderTxPhotos();
+    renderSplit();
     resetScanUi();
     els.txSub.textContent = 'Dépense, revenu, prévision ou paiement qui se répète.';
     setRadio(els.txForm, 'tx-mode', mode);
@@ -3191,7 +3566,10 @@
   }
 
   function openTx(tx) {
-    Object.assign(txUi, { mode: tx.type, txId: tx.id, ruleId: null, envTouched: true, suggested: false, envId: tx.type === 'expense' ? tx.envId : null, projectId: tx.type === 'deposit' ? tx.envId : null, coversTouched: false });
+    Object.assign(txUi, { mode: tx.type, txId: tx.id, ruleId: null, envTouched: true, suggested: false, envId: tx.type === 'expense' ? tx.envId : null, projectId: tx.type === 'deposit' ? tx.envId : null, coversTouched: false, photos: [...(tx.photos || [])], items: [], split: { on: false, rows: [] } });
+    els.txPro.checked = Boolean(tx.pro);
+    renderTxPhotos();
+    renderSplit();
     resetScanUi();
     els.txTitle.textContent = tx.date > clock.today() ? 'Modifier la prévision' : "Modifier l'opération";
     els.txSub.textContent = tx.type === 'income' ? 'Revenu' : tx.type === 'deposit' ? 'Versement sur un projet' : 'Dépense';
@@ -3215,7 +3593,8 @@
   }
 
   function openRule(rule) {
-    Object.assign(txUi, { mode: rule.type, txId: null, ruleId: rule.id, envTouched: true, suggested: false, envId: rule.envId, projectId: null });
+    Object.assign(txUi, { mode: rule.type, txId: null, ruleId: rule.id, envTouched: true, suggested: false, envId: rule.envId, projectId: null, photos: [], items: [], split: { on: false, rows: [] } });
+    renderSplit();
     resetScanUi();
     els.txTitle.textContent = 'Modifier la récurrence';
     els.txSub.textContent = 'Les changements s\'appliquent aux prochaines échéances.';
@@ -3299,6 +3678,7 @@
   [els.txAmount, els.txUntil].forEach((el) => el.addEventListener('input', () => {
     hideError(els.txError);
     if (txUi.mode === 'deposit') syncCovers();
+    if (txUi.split.on) updateSplitHint();
     updateTxHint();
   }));
   els.txDate.addEventListener('input', () => {
@@ -3336,7 +3716,8 @@
     if (txUi.txId) {
       const res = updateTransaction(txUi.txId, {
         type: mode, envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId, amount, note: label, date, detail,
-        covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked
+        covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked,
+        pro: !els.txProField.hidden && els.txPro.checked, photos: mode === 'deposit' ? undefined : [...txUi.photos]
       });
       if (!res.ok) return showError(els.txError, res.error);
       if (mode === 'expense' && txUi.envId && label) learnRule(label, txUi.envId);
@@ -3362,11 +3743,33 @@
       return;
     }
 
+    if (txUi.split.on) {
+      const parts = txUi.split.rows.filter((r) => r.amount > 0);
+      const sum = parts.reduce((s, r) => s + r.amount, 0);
+      if (txUi.split.rows.some((r) => r.amount === null && r.envId)) return showError(els.txError, 'Indique un montant pour chaque ligne, ou retire-la.');
+      if (amount && sum !== amount) return showError(els.txError, `Les lignes font ${money(sum)} pour un total de ${money(amount)} : ajuste-les.`);
+      const res = addSplit({ note: label, date, detail, pro: !els.txProField.hidden && els.txPro.checked }, parts);
+      if (!res.ok) return showError(els.txError, res.error);
+      if (txUi.photos.length) {
+        for (const t of res.data.txs) t.photos = [...txUi.photos];
+        commit();
+      }
+      closeDialog(els.dlgTx);
+      const n = new Set(res.data.txs.map((t) => t.envId || '')).size;
+      toast(`Ticket de ${money(sum)} réparti sur ${n} ${plural(n, 'enveloppe', 'enveloppes')}.`, { action: { label: 'Annuler', run: () => {
+        state.transactions = state.transactions.filter((t) => t.group !== res.data.group);
+        commit();
+        toast('Répartition annulée.');
+      } } });
+      return;
+    }
     const payload = {
       type: mode,
       envId: mode === 'income' ? null : mode === 'deposit' ? txUi.projectId : txUi.envId,
       amount, note: label, date, detail,
-      covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked
+      covers: mode === 'deposit' && !els.txCoversField.hidden && els.txCovers.checked,
+      pro: !els.txProField.hidden && els.txPro.checked,
+      photos: mode === 'deposit' ? null : [...txUi.photos]
     };
     const pre = validateTx(payload, null);
     if (!pre.ok) return showError(els.txError, pre.error);
@@ -3448,57 +3851,304 @@
     'initialized api': 'Préparation…'
   };
 
-  els.txScan.addEventListener('click', () => els.scanFile.click());
-  els.scanFile.addEventListener('change', async () => {
-    const file = els.scanFile.files && els.scanFile.files[0];
-    els.scanFile.value = '';
+  // ——— Scan : recadrage, lecture d'un ticket (photo) ou d'une facture (PDF) ———
+  const crop = { file: null, url: null, box: { x0: 0, y0: 0, x1: 1, y1: 1 } };
+  ui.crop = crop.box;
+
+  function placeCropBox() {
+    const b = crop.box;
+    Object.assign(els.cropBox.style, { left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`, width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%` });
+  }
+
+  function openCrop(file) {
+    crop.file = file;
+    if (crop.url) URL.revokeObjectURL(crop.url);
+    crop.url = URL.createObjectURL(file);
+    Object.assign(crop.box, { x0: 0.04, y0: 0.03, x1: 0.96, y1: 0.97 });
+    els.cropImg.src = crop.url;
+    placeCropBox();
+    openDialog(els.dlgCrop);
+  }
+
+  // Coins déplaçables : la sélection garde au moins 10 % de largeur et de hauteur.
+  els.cropStage.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.crop-handle');
+    if (!handle) return;
+    e.preventDefault();
+    const which = handle.dataset.h;
+    const rect = els.cropImg.getBoundingClientRect();
+    const move = (ev) => {
+      const x = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+      const y = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+      const b = crop.box;
+      if (which.includes('w')) b.x0 = Math.min(x, b.x1 - 0.1);
+      if (which.includes('e')) b.x1 = Math.max(x, b.x0 + 0.1);
+      if (which.includes('n')) b.y0 = Math.min(y, b.y1 - 0.1);
+      if (which.includes('s')) b.y1 = Math.max(y, b.y0 + 0.1);
+      placeCropBox();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+
+  // Découpe de la photo d'origine (pleine résolution) selon la sélection.
+  async function cropCanvas(file, box) {
+    const img = await loadImage(file);
+    const w0 = img.naturalWidth;
+    const h0 = img.naturalHeight;
+    const sx = Math.round(box.x0 * w0);
+    const sy = Math.round(box.y0 * h0);
+    const sw = Math.max(1, Math.round((box.x1 - box.x0) * w0));
+    const sh = Math.max(1, Math.round((box.y1 - box.y0) * h0));
+    const canvas = document.createElement('canvas');
+    canvas.width = sw;
+    canvas.height = sh;
+    canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    return canvas;
+  }
+
+  els.cropAll.addEventListener('click', () => {
+    Object.assign(crop.box, { x0: 0, y0: 0, x1: 1, y1: 1 });
+    els.cropRead.click();
+  });
+  els.cropRead.addEventListener('click', async () => {
+    const file = crop.file;
     if (!file) return;
+    const box = { ...crop.box };
+    closeDialog(els.dlgCrop);
+    const full = box.x0 <= 0 && box.y0 <= 0 && box.x1 >= 1 && box.y1 >= 1;
+    await runScan(async (progress) => {
+      const source = full ? file : await cropCanvas(file, box);
+      const r = await scanReceipt(source, progress);
+      stagePhoto(await savePhoto(source));
+      return r;
+    });
+  });
+
+  const scanProgress = (m) => {
+    if (!els.dlgTx.open) return;
+    els.scanText.textContent = m.status === 'recognizing text'
+      ? `Lecture du ticket… ${Math.round((m.progress || 0) * 100)} %`
+      : m.status === 'pdf' ? 'Lecture de la facture…' : SCAN_STEPS[m.status] || 'Préparation…';
+  };
+
+  async function runScan(read) {
     txUi.scanning = true;
     hideError(els.txError);
     els.scanStatus.hidden = false;
     els.txScan.hidden = true;
-    els.scanText.textContent = 'Préparation de la photo…';
+    els.scanText.textContent = 'Préparation…';
     try {
-      const r = await scanReceipt(file, (m) => {
-        if (!els.dlgTx.open) return;
-        els.scanText.textContent = m.status === 'recognizing text'
-          ? `Lecture du ticket… ${Math.round((m.progress || 0) * 100)} %`
-          : SCAN_STEPS[m.status] || 'Préparation…';
-      });
+      const r = await read(scanProgress);
       if (!els.dlgTx.open) return;
       resetScanUi();
-      if (!r.total && !r.items.length) {
-        syncTxForm();
-        return showError(els.txError, "Je n'ai pas réussi à lire ce ticket. Reprends la photo bien à plat, avec plus de lumière, ou saisis le montant.");
-      }
-      if (r.total) els.txAmount.value = toInputValue(Math.abs(r.total));
-      if (r.merchant && !els.txLabel.value.trim()) els.txLabel.value = r.merchant;
-      if (r.date) els.txDate.value = r.date;
-      const detail = receiptDetail(r);
-      if (detail) {
-        els.txDetail.value = detail;
-        els.txDetailBox.open = true;
-      }
-      ui.lastScan = { merchant: r.merchant, date: r.date, dateOld: r.dateOld, total: r.total, items: r.items };
-      if (!txUi.envTouched) {
-        const guess = guessEnvelope(`${r.merchant || ''} ${r.text.slice(0, 400)}`);
-        if (guess) {
-          txUi.envId = guess;
-          txUi.suggested = true;
-        }
-      }
-      syncTxForm();
-      const env = spendEnv(txUi.envId);
-      const old = r.dateOld ? ` Ticket daté du ${parseISO(r.date).toLocaleDateString('fr-FR')} : vérifie la date.` : '';
-      setHint(els.txHint, `Ticket lu${r.merchant ? ` (${r.merchant})` : ''} : ${r.total ? money(Math.abs(r.total)) : 'montant à vérifier'}${r.items.length ? `, ${r.items.length} ${plural(r.items.length, 'article', 'articles')}` : ''}. ${env ? `Enveloppe proposée : « ${env.name} ». ` : ''}Vérifie avant d'ajouter.${old}`, r.dateOld ? 'bad' : 'ok');
+      applyScan(r);
     } catch (err) {
       console.warn('BudgetFold scan', err);
       resetScanUi();
       syncTxForm();
       showError(els.txError, navigator.onLine === false
-        ? 'La première lecture de ticket a besoin d\'internet pour télécharger le moteur (≈ 5 Mo). Ensuite, ça marche hors ligne.'
+        ? 'La première lecture a besoin d\'internet pour télécharger le moteur. Ensuite, ça marche hors ligne.'
         : 'Lecture impossible pour le moment. Réessaie, ou saisis le montant à la main.');
     }
+  }
+
+  function applyScan(r) {
+    if (!r.total && !r.items.length) {
+      syncTxForm();
+      return showError(els.txError, r.pdf ? 'Je n\'ai pas trouvé de montant dans cette facture : saisis-le à la main.' : "Je n'ai pas réussi à lire ce ticket. Reprends la photo bien à plat, avec plus de lumière, ou saisis le montant.");
+    }
+    if (r.total) els.txAmount.value = toInputValue(Math.abs(r.total));
+    if (r.merchant && !els.txLabel.value.trim()) els.txLabel.value = r.merchant;
+    if (r.date) els.txDate.value = r.date;
+    const detail = receiptDetail(r);
+    if (detail) {
+      els.txDetail.value = detail;
+      els.txDetailBox.open = true;
+    }
+    ui.lastScan = { merchant: r.merchant, date: r.date, dateOld: r.dateOld, total: r.total, items: r.items };
+    txUi.items = r.items.filter((it) => it.amount > 0);
+    if (!txUi.envTouched) {
+      const guess = guessEnvelope(`${r.merchant || ''} ${r.text.slice(0, 400)}`);
+      if (guess) {
+        txUi.envId = guess;
+        txUi.suggested = true;
+      }
+    }
+    syncTxForm();
+    const env = spendEnv(txUi.envId);
+    const old = r.dateOld ? ` ${r.pdf ? 'Facture datée' : 'Ticket daté'} du ${parseISO(r.date).toLocaleDateString('fr-FR')} : vérifie la date.` : '';
+    const split = txUi.items.length >= 2 ? ' Touche « Répartir » pour ventiler les articles entre enveloppes.' : '';
+    setHint(els.txHint, `${r.pdf ? 'Facture lue' : 'Ticket lu'}${r.merchant ? ` (${r.merchant})` : ''} : ${r.total ? money(Math.abs(r.total)) : 'montant à vérifier'}${r.items.length ? `, ${r.items.length} ${plural(r.items.length, 'article', 'articles')}` : ''}. ${env ? `Enveloppe proposée : « ${env.name} ». ` : ''}Vérifie avant d'ajouter.${old}${split}`, r.dateOld ? 'bad' : 'ok');
+  }
+
+  els.txScan.addEventListener('click', () => els.scanFile.click());
+  els.scanFile.addEventListener('change', async () => {
+    const file = els.scanFile.files && els.scanFile.files[0];
+    els.scanFile.value = '';
+    if (!file) return;
+    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+      return runScan(async (progress) => {
+        progress({ status: 'pdf' });
+        const text = await pdfText(file);
+        stagePhoto(await savePhoto(file));
+        return { ...parseReceipt(text), text, pdf: true };
+      });
+    }
+    openCrop(file);
+  });
+
+  // ——— Justificatifs dans la saisie ———
+  function stagePhoto(rec) {
+    if (!rec || txUi.photos.includes(rec.id)) return;
+    txUi.photos.push(rec.id);
+    renderTxPhotos();
+  }
+
+  async function hydrateThumbs(root) {
+    for (const el of root.querySelectorAll('[data-photo]:not([data-ready])')) {
+      el.dataset.ready = '1';
+      const rec = await Photos.get(el.dataset.photo).catch(() => null);
+      if (!rec) { el.classList.add('is-missing'); continue; }
+      if (rec.type === 'application/pdf') { el.classList.add('is-pdf'); fill(el, icon('file-text')); flushIcons(); continue; }
+      const url = await photoUrl(rec.id);
+      if (url) fill(el, h('img', { src: url, alt: '' }));
+    }
+  }
+
+  function renderTxPhotos() {
+    fill(els.txPhotos,
+      txUi.photos.map((id, i) => h('button', { type: 'button', class: 'proof', dataset: { photo: id, i: String(i) }, 'aria-label': `Voir le justificatif ${i + 1}` })),
+      h('button', { type: 'button', class: 'proof proof-add', id: 'tx-photo-add', 'aria-label': 'Ajouter une photo ou un PDF' }, icon('image-plus')));
+    flushIcons();
+    hydrateThumbs(els.txPhotos);
+  }
+
+  els.txPhotos.addEventListener('click', (e) => {
+    if (e.target.closest('.proof-add')) return els.photoFile.click();
+    const p = e.target.closest('[data-photo]');
+    if (p) openViewer(Number(p.dataset.i));
+  });
+
+  els.photoFile.addEventListener('change', async () => {
+    const files = [...(els.photoFile.files || [])];
+    els.photoFile.value = '';
+    for (const f of files.slice(0, 10)) {
+      try {
+        stagePhoto(await savePhoto(f));
+      } catch {
+        showError(els.txError, 'Impossible d\'enregistrer cette photo sur l\'appareil (stockage plein ou bloqué).');
+      }
+    }
+  });
+
+  // ——— Visionneuse ———
+  const viewer = { index: 0 };
+  async function renderViewer() {
+    const id = txUi.photos[viewer.index];
+    els.photoSub.textContent = `${viewer.index + 1} / ${txUi.photos.length}`;
+    els.photoPrev.disabled = viewer.index === 0;
+    els.photoNext.disabled = viewer.index >= txUi.photos.length - 1;
+    const rec = id ? await Photos.get(id).catch(() => null) : null;
+    if (!rec) return fill(els.photoView, h('p', { class: 'muted', text: 'Justificatif introuvable sur cet appareil.' }));
+    const url = await photoUrl(id);
+    fill(els.photoView, rec.type === 'application/pdf'
+      ? h('a', { class: 'btn primary', href: url, target: '_blank', rel: 'noopener', text: 'Ouvrir le PDF' })
+      : h('img', { src: url, alt: `Justificatif ${viewer.index + 1}` }));
+  }
+  function openViewer(index) {
+    viewer.index = index;
+    openDialog(els.dlgPhoto);
+    renderViewer();
+  }
+  els.photoPrev.addEventListener('click', () => { viewer.index = Math.max(0, viewer.index - 1); renderViewer(); });
+  els.photoNext.addEventListener('click', () => { viewer.index = Math.min(txUi.photos.length - 1, viewer.index + 1); renderViewer(); });
+  els.photoDelete.addEventListener('click', () => {
+    const [removed] = txUi.photos.splice(viewer.index, 1);
+    const at = viewer.index;
+    closeDialog(els.dlgPhoto);
+    renderTxPhotos();
+    toast('Justificatif retiré (pris en compte à l\'enregistrement).', { action: { label: 'Annuler', run: () => { txUi.photos.splice(at, 0, removed); renderTxPhotos(); } } });
+  });
+  els.photoReplace.addEventListener('click', () => els.photoReplaceFile.click());
+  els.photoReplaceFile.addEventListener('change', async () => {
+    const f = els.photoReplaceFile.files && els.photoReplaceFile.files[0];
+    els.photoReplaceFile.value = '';
+    if (!f) return;
+    const rec = await savePhoto(f);
+    txUi.photos[viewer.index] = rec.id;
+    renderTxPhotos();
+    renderViewer();
+  });
+
+  // ——— Répartir un ticket entre plusieurs enveloppes ———
+  function splitRow(row, i) {
+    const envs = state.envelopes.filter((e) => e.kind === 'spend');
+    return h('div', { class: 'split-row', dataset: { i: String(i) } },
+      h('div', { class: 'money-input' }, h('input', { type: 'text', inputmode: 'decimal', class: 'split-amount', value: row.amount ? toInputValue(row.amount) : '', placeholder: '0', 'aria-label': `Montant ${i + 1}` }), h('span', { text: '€' })),
+      h('div', { class: 'select-wrap' }, h('select', { class: 'split-env', 'aria-label': `Enveloppe ${i + 1}` },
+        h('option', { value: '', text: 'Aucune' }), envs.map((e) => h('option', { value: e.id, text: e.name })))),
+      h('input', { type: 'text', class: 'split-note', maxlength: '80', value: row.note || '', placeholder: 'Article (facultatif)', 'aria-label': `Article ${i + 1}` }),
+      h('button', { type: 'button', class: 'icon-btn small split-del', 'aria-label': `Retirer la ligne ${i + 1}` }, icon('x')));
+  }
+
+  function renderSplit() {
+    const on = txUi.split.on;
+    els.txSplit.hidden = !on;
+    els.txChips.hidden = on;
+    if (!on) return;
+    fill(els.txSplitRows, txUi.split.rows.map(splitRow));
+    els.txSplitRows.querySelectorAll('.split-row').forEach((el) => { el.querySelector('.split-env').value = txUi.split.rows[Number(el.dataset.i)].envId || ''; });
+    updateSplitHint();
+    flushIcons();
+  }
+
+  function updateSplitHint() {
+    const total = parseAmount(els.txAmount.value) || 0;
+    const sum = txUi.split.rows.reduce((s, r) => s + (r.amount || 0), 0);
+    const n = new Set(txUi.split.rows.filter((r) => r.amount > 0).map((r) => r.envId || '')).size;
+    if (!total) return setHint(els.txSplitHint, `Réparti : ${money(sum)} sur ${n} ${plural(n, 'enveloppe', 'enveloppes')}. Le montant total sera la somme des lignes.`);
+    const diff = total - sum;
+    setHint(els.txSplitHint, diff === 0 ? `Tout est réparti : ${money(sum)} sur ${n} ${plural(n, 'enveloppe', 'enveloppes')}.` : diff > 0 ? `Il reste ${money(diff)} à répartir.` : `Tu as réparti ${money(-diff)} de trop.`, diff === 0 ? 'ok' : 'bad');
+  }
+
+  els.txSplitBtn.addEventListener('click', () => {
+    const total = parseAmount(els.txAmount.value) || 0;
+    const items = txUi.items || [];
+    txUi.split.rows = items.length >= 2
+      ? items.map((it) => ({ amount: it.amount, envId: guessEnvelope(it.label) || txUi.envId || null, note: it.label }))
+      : [{ amount: total || null, envId: txUi.envId || null, note: '' }, { amount: null, envId: null, note: '' }];
+    if (items.length >= 2 && total) {
+      const diff = total - txUi.split.rows.reduce((s, r) => s + r.amount, 0);
+      if (diff) txUi.split.rows.push({ amount: diff > 0 ? diff : null, envId: txUi.envId || null, note: diff > 0 ? 'Écart (remise, arrondi…)' : '' });
+    }
+    txUi.split.on = true;
+    renderSplit();
+    syncTxForm();
+  });
+  els.txSplitOff.addEventListener('click', () => { txUi.split.on = false; renderSplit(); syncTxForm(); });
+  els.txSplitAdd.addEventListener('click', () => { txUi.split.rows.push({ amount: null, envId: null, note: '' }); renderSplit(); });
+  els.txSplitRows.addEventListener('input', (e) => {
+    const row = e.target.closest('.split-row');
+    if (!row) return;
+    const r = txUi.split.rows[Number(row.dataset.i)];
+    if (e.target.classList.contains('split-amount')) r.amount = parseAmount(e.target.value);
+    if (e.target.classList.contains('split-note')) r.note = e.target.value;
+    updateSplitHint();
+  });
+  els.txSplitRows.addEventListener('change', (e) => {
+    const row = e.target.closest('.split-row');
+    if (row && e.target.classList.contains('split-env')) txUi.split.rows[Number(row.dataset.i)].envId = e.target.value || null;
+  });
+  els.txSplitRows.addEventListener('click', (e) => {
+    const del = e.target.closest('.split-del');
+    if (!del) return;
+    txUi.split.rows.splice(Number(del.closest('.split-row').dataset.i), 1);
+    renderSplit();
   });
 
   const envUi = { id: null, kind: 'spend' };
@@ -4034,6 +4684,135 @@
     } else toast('Bien noté.', { action: { label: 'Annuler', run: () => updateProjectInfo(e.id, { boughtAt: null }) } });
   });
 
+  // ——— Micro-entreprise : bilan pro et seuils ———
+  function proThresholds(year) {
+    const pro = state.prefs.pro;
+    const ca = proRevenue(year);
+    return [['Plafond de chiffre d\'affaires', pro.ceiling], ['Franchise de TVA', pro.vatThreshold]]
+      .filter(([, limit]) => limit > 0)
+      .map(([label, limit]) => ({ label, limit, ca, ratio: ca / limit }));
+  }
+
+  function renderProCard(d, key) {
+    const pro = state.prefs.pro;
+    els.rPro.hidden = !pro.enabled;
+    if (!pro.enabled) return;
+    const year = key.slice(0, 4);
+    const from = cycleStart(key);
+    const to = cycleEnd(key);
+    const costs = state.transactions.reduce((s, t) => s + (t.type === 'expense' && t.pro && t.date >= from && t.date <= to ? t.amount : 0), 0);
+    fill(els.rPro,
+      h('h3', { text: 'Micro-entreprise' }),
+      h('div', { class: 'tiles' },
+        h('div', { class: 'tile' }, h('span', { text: 'Chiffre d\'affaires du mois' }), h('strong', { text: money(d.proIncome) })),
+        h('div', { class: 'tile' }, h('span', { text: `Cotisations à mettre de côté (${bpText(pro.rateBp) || '0'} %)` }), h('strong', { text: money(d.provision) })),
+        h('div', { class: 'tile' }, h('span', { text: `Chiffre d'affaires ${year}` }), h('strong', { text: money(proRevenue(year)) })),
+        h('div', { class: 'tile' }, h('span', { text: 'Frais pro du mois' }), h('strong', { text: money(costs) }))),
+      proThresholds(year).map((t) => h('div', { class: 'bar-row', dataset: { state: t.ratio >= 1 ? 'over' : t.ratio >= 0.9 ? 'tight' : 'safe' } },
+        h('div', { class: 'bar-row-head' }, h('span', { text: t.label }), h('strong', { text: `${money(t.ca)} / ${money(t.limit)}` })),
+        h('div', { class: 'bar' }, h('div', { class: 'bar-fill', style: `width:${Math.min(100, t.ratio * 100)}%` })))),
+      pro.rateBp ? null : h('p', { class: 'muted small', text: 'Indique ton taux de cotisations dans Réglages pour les mettre de côté automatiquement.' }));
+  }
+
+  // ——— Règles de classement ———
+  function openRules() {
+    const envs = state.envelopes.filter((e) => e.kind === 'spend');
+    fill(els.ruleEnv, envs.map((e) => h('option', { value: e.id, text: e.name })));
+    hideError(els.ruleError);
+    renderRules2();
+    closeDialog(els.dlgMenu);
+    openDialog(els.dlgRules);
+  }
+
+  function renderRules2() {
+    const envs = state.envelopes.filter((e) => e.kind === 'spend');
+    const rules = state.rules.filter((r) => spendEnv(r.envId));
+    fill(els.ruleList, rules.length
+      ? rules.map((r) => h('div', { class: 'rule-row', dataset: { key: r.key } },
+        h('span', { class: 'rule-if', text: 'Si contient' }),
+        h('input', { type: 'text', class: 'rule-edit-key', value: r.key, maxlength: '40', 'aria-label': `Texte de la règle ${r.key}` }),
+        h('span', { class: 'rule-then', 'aria-hidden': 'true' }, icon('arrow-right')),
+        h('div', { class: 'select-wrap' }, h('select', { class: 'rule-edit-env', 'aria-label': `Enveloppe pour ${r.key}` }, envs.map((e) => h('option', { value: e.id, text: e.name })))),
+        r.source === 'user' ? null : h('em', { class: 'tag-planned', text: 'Apprise' }),
+        h('button', { type: 'button', class: 'icon-btn small rule-del', 'aria-label': `Supprimer la règle ${r.key}` }, icon('trash-2'))))
+      : h('p', { class: 'muted', text: 'Aucune règle pour l\'instant. Classe quelques dépenses, ou ajoute une règle ci-dessus.' }));
+    els.ruleList.querySelectorAll('.rule-row').forEach((row) => { row.querySelector('.rule-edit-env').value = state.rules.find((r) => r.key === row.dataset.key).envId; });
+    flushIcons();
+  }
+
+  els.ruleForm.addEventListener('submit', guard(() => {
+    const res = saveCatRule({ key: els.ruleKey.value, envId: els.ruleEnv.value });
+    if (!res.ok) return showError(els.ruleError, res.error);
+    hideError(els.ruleError);
+    els.ruleKey.value = '';
+    renderRules2();
+  }));
+  els.ruleList.addEventListener('change', (e) => {
+    const row = e.target.closest('.rule-row');
+    if (!row) return;
+    const res = saveCatRule({ key: row.querySelector('.rule-edit-key').value, envId: row.querySelector('.rule-edit-env').value, previous: row.dataset.key });
+    if (!res.ok) showError(els.ruleError, res.error);
+    else hideError(els.ruleError);
+    renderRules2();
+  });
+  els.ruleList.addEventListener('click', (e) => {
+    const del = e.target.closest('.rule-del');
+    if (!del) return;
+    const res = deleteCatRule(del.closest('.rule-row').dataset.key);
+    if (!res.ok) return;
+    renderRules2();
+    toast(`Règle « ${res.data.rule.key} » supprimée.`, { action: { label: 'Annuler', run: () => { state.rules.splice(res.data.index, 0, res.data.rule); commit(); if (els.dlgRules.open) renderRules2(); } } });
+  });
+  els.menuRules.addEventListener('click', openRules);
+
+  // ——— Exports zip ———
+  function openProofs() {
+    const key = currentMonth();
+    els.proofsFrom.value = cycleStart(key);
+    els.proofsTo.value = cycleEnd(key);
+    els.proofsProField.hidden = !state.prefs.pro.enabled;
+    els.proofsPro.checked = state.prefs.pro.enabled;
+    hideError(els.proofsError);
+    updateProofsHint();
+    closeDialog(els.dlgMenu);
+    openDialog(els.dlgProofs);
+  }
+  function updateProofsHint() {
+    const from = els.proofsFrom.value;
+    const to = els.proofsTo.value;
+    if (!isISO(from) || !isISO(to) || to < from) return setHint(els.proofsHint, 'Choisis une période valide.', 'bad');
+    const proOnly = !els.proofsProField.hidden && els.proofsPro.checked;
+    const txs = state.transactions.filter((t) => (t.type === 'expense' || t.type === 'income') && t.date >= from && t.date <= to && (!proOnly || t.pro));
+    const photos = txs.reduce((s, t) => s + (t.photos || []).length, 0);
+    setHint(els.proofsHint, `${txs.length} ${plural(txs.length, 'opération', 'opérations')}, ${photos} ${plural(photos, 'justificatif', 'justificatifs')}.`, 'ok');
+  }
+  [els.proofsFrom, els.proofsTo, els.proofsPro].forEach((el) => el.addEventListener('change', updateProofsHint));
+  els.proofsForm.addEventListener('submit', guard(async () => {
+    const from = els.proofsFrom.value;
+    const to = els.proofsTo.value;
+    if (!isISO(from) || !isISO(to) || to < from) return showError(els.proofsError, 'Choisis une période valide.');
+    try {
+      const res = await proofsZip({ from, to, proOnly: !els.proofsProField.hidden && els.proofsPro.checked });
+      download(res.blob, `justificatifs-${from}-au-${to}.zip`);
+      closeDialog(els.dlgProofs);
+      toast(`Export prêt : ${res.count} ${plural(res.count, 'opération', 'opérations')}, ${res.photos} ${plural(res.photos, 'justificatif', 'justificatifs')}.`);
+    } catch {
+      showError(els.proofsError, 'Export impossible : les photos ne sont pas accessibles sur cet appareil.');
+    }
+  }));
+  els.menuProofs.addEventListener('click', openProofs);
+  els.menuBackup.addEventListener('click', async () => {
+    closeDialog(els.dlgMenu);
+    try {
+      download(await fullBackupZip(), `budgetfold-${clock.today()}.zip`);
+      state.prefs.lastExport = clock.today();
+      commit();
+      toast('Sauvegarde complète exportée (données et photos).');
+    } catch {
+      toast('Sauvegarde impossible : les photos ne sont pas accessibles sur cet appareil.', 'error');
+    }
+  });
+
   // ——— Clôture du mois ———
   const closeUi = { key: null, choice: null };
   const closeValue = (c) => (c.action === 'project' ? `project:${c.projectId}` : c.action);
@@ -4328,6 +5107,12 @@
     setRadio(els.setForm, 'set-cycle', state.prefs.cycle);
     els.setCyclePayText.textContent = `Jour de paie (le ${state.salaryDay})`;
     els.setAutoClose.checked = state.prefs.closing.auto;
+    const pro = state.prefs.pro;
+    els.setPro.checked = pro.enabled;
+    els.setProRate.value = bpText(pro.rateBp);
+    els.setProCeiling.value = pro.ceiling ? toInputValue(pro.ceiling) : '';
+    els.setProVat.value = pro.vatThreshold ? toInputValue(pro.vatThreshold) : '';
+    els.setProBox.open = pro.enabled;
     hideError(els.setError);
     closeDialog(els.dlgMenu);
     openDialog(els.dlgSettings);
@@ -4341,6 +5126,10 @@
   els.setForm.addEventListener('submit', guard(() => {
     const raw = els.setOpening.value.trim();
     const opening = raw === '' ? null : (parseAmount(raw) ?? undefined);
+    const optional = (el) => (el.value.trim() === '' ? null : (parseAmount(el.value) ?? undefined));
+    const rate = bpOf(els.setProRate.value);
+    const proRes = setProSettings({ enabled: els.setPro.checked, rateBp: rate === null || rate > 10000 ? null : rate, ceiling: optional(els.setProCeiling), vatThreshold: optional(els.setProVat) });
+    if (!proRes.ok) return showError(els.setError, proRes.error);
     const res = setSettings({ salaryDay: parseDayInput(els.setDay.value), openingBalance: opening, cycle: checkedValue(els.setForm, 'set-cycle'), autoClose: els.setAutoClose.checked });
     if (!res.ok) return showError(els.setError, res.error);
     closeDialog(els.dlgSettings);
@@ -4561,7 +5350,16 @@
 
   async function importJson(file) {
     try {
-      const raw = JSON.parse(await file.text());
+      let raw;
+      let entries = null;
+      if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
+        entries = await readZip(await file.arrayBuffer());
+        const json = entries.get('budgetfold.json');
+        if (!json) throw new Error('invalid');
+        raw = JSON.parse(new TextDecoder().decode(json));
+      } else {
+        raw = JSON.parse(await file.text());
+      }
       const parsed = fromAnyVersion(raw);
       if (!parsed || (parsed.salary <= 0 && !parsed.envelopes.length)) throw new Error('invalid');
       const confirmed = await confirmAction({
@@ -4570,6 +5368,16 @@
         confirmLabel: 'Importer'
       });
       if (!confirmed) return;
+      if (entries) {
+        const meta = raw.photos || {};
+        for (const [name, data] of entries) {
+          const m = /^photos\/([\w-]+)\.(jpg|pdf)$/.exec(name);
+          if (!m) continue;
+          const info = meta[m[1]] || {};
+          const type = m[2] === 'pdf' ? 'application/pdf' : 'image/jpeg';
+          await Photos.put({ id: m[1], blob: new Blob([data], { type }), type, w: info.w || 0, h: info.h || 0, size: data.length, name: info.name || '', createdAt: info.createdAt || clock.now() });
+        }
+      }
       state = parsed;
       state.prefs.onboarded = true;
       announceCredits(runRollover());
@@ -4867,11 +5675,12 @@
     postRecurring, occurrences, periodWindow, envRow, projectPlan, applyTemplate, render, setTab, guessEnvelope,
     cycleStart, cycleEnd, budgetKey, currentMonth, pendingClosings, closingDefaults, nextPayMonth,
     projectResults, simulate, runScenarios, projectAdvice, monthlyOf, projectContribution,
+    Photos, savePhoto, compressPhoto, readZip, makeZip, fullBackupZip, proofsZip, pdfText, cropCanvas, proRevenue,
     actions: {
       addTransaction, updateTransaction, deleteTransaction, createEnvelope, updateEnvelope, deleteEnvelope, resetEnvelope,
       addRule, updateRule, deleteRule, setSalary, setSettings, openAdd, openTx, openRule, openEnv,
       closeMonth, reopenMonth, moveMoney, deleteMove, resetAllEnvelopes, openClosing, openMove, exportData,
-      addWish, updateProjectInfo, openProject
+      addWish, updateProjectInfo, openProject, saveCatRule, deleteCatRule, setProSettings, addSplit, openRules, openProofs, importJson
     }
   };
 
@@ -4879,6 +5688,7 @@
   save();
   render();
   securePersistence();
+  cleanupPhotos();
   announceClosed(boot.closed);
   announceCredits(boot.credits);
   announcePosted(boot.posted);
