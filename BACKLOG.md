@@ -1,6 +1,6 @@
 # BudgetFold OS — Backlog après les retours sur la v3
 
-Retours du 28/10/2026. Rien n'est encore corrigé : ce fichier sert de feuille de route pour la v4.
+Retours du 28/10/2026. Tout est traité dans la version 1.0.0 (voir `CHANGELOG.md` et `PROGRESS.md`).
 Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = plus tard.
 
 ---
@@ -104,7 +104,7 @@ Priorités : **P0** = bug, **P1** = important, **P2** = amélioration, **P3** = 
 
 ---
 
-## Notes techniques pour la suite (passage sur Claude Code)
+## Notes techniques pour la suite (passage sur Claude Code) — ✅ fait en 1.0.0 (modules ES, tests par domaine, migrations, photos)
 
 - Code source découpé en parties concaténées dans `script.js` (`a.js` → `f_boot.js`). En v4, passer à des **modules ES**, ou garder un seul fichier avec des sections claires.
 - Tests : environ 95 vérifications automatiques dans un vrai navigateur (Puppeteer) et un test OCR de bout en bout. À reprendre dans le dépôt (`tests/`) avec une commande `npm test`.

@@ -3,7 +3,7 @@
 Suivi de `ROADMAP-1.0.md`. Mis à jour à chaque étape. Si la session s'interrompt, reprendre à la **phase en cours** ci-dessous, à la première case non cochée.
 
 ## Phase en cours
-**Phase 9 — Qualité et finition**
+**Terminé : version 1.0.0** (phases 1 à 9). Seul point restant : les essais sur de vrais appareils, voir « Points reportés ».
 
 ## Décisions transverses
 - **Format de données v4** = format de la 1.0. Il est construit au fil des phases 1 à 8 et n'est publié (push) qu'à la fin : aucun utilisateur ne verra de v4 « intermédiaire ». Chaque champ ajouté est lu par `migrateV3` (v3 → v4) et couvert par un test. Champ `v` toujours présent.
@@ -202,9 +202,29 @@ Décisions de la phase 8 :
 - Nouvelle dépendance à la demande : qrcode-generator 1.4.4 (jsdelivr, version figée), installée en `devDependencies` pour les tests.
 
 ## Phase 9 — Qualité et finition
-_À planifier._
+Plan :
+1. Découper `script.js` en modules ES natifs (`js/*.mjs`) avec un outil (`tools/split-modules.py`) : imports seulement vers le haut, `hooks` pour les trois appels vers l'interface, setters pour les variables réaffectées ailleurs.
+2. `BudgetFold.html` généré par `tools/build-single.js` (modules concaténés, CSS et icônes intégrés), testé.
+3. Tests : `app.test.js` réparti par domaine (calculs, récurrences, mobile, migration v2) ; captures de référence ; émulation d'appareils ; audit Lighthouse (`npm run audit`).
+4. Performance : icônes Lucide embarquées (130 utilisées au lieu de la bibliothèque complète depuis unpkg), `modulepreload`, police non bloquante, effets de flou retirés.
+5. Documentation : README avec captures, `docs/guide.md`, `CHANGELOG.md`, `docs/checklist.md`, `CLAUDE.md` à jour. Version 1.0.0.
+
+- [x] Modules ES natifs, sans build, + version en un seul fichier (`BudgetFold.html`)
+- [x] Tests : un fichier par domaine (calculs, récurrences, clôture, projets, tickets, interface mobile…), un test de migration par ancienne version (v1, v2, v3), captures de référence 390 et 1280 px, audit d'accessibilité et de performance (Lighthouse mobile : performance 92-93, accessibilité / bonnes pratiques / SEO 100)
+- [x] Documentation : README avec captures, guide utilisateur, CHANGELOG, liste de contrôle avant chaque version
+- [ ] Version 1.0.0 testée sur de vrais iPhone, iPad, Android et ordinateur → **reporté** (voir ci-dessous) ; testée en émulation (`tests/devices.test.js`) et publiée par le `git push` final.
+
+Décisions de la phase 9 :
+- Modules en `.mjs` pour que `node --check` vérifie leur syntaxe et que GitHub Pages les serve en JavaScript.
+- Les icônes Lucide ne sont plus chargées depuis unpkg : elles sont dans `js/icons.mjs` (26 Ko, licence ISC). Une dépendance tierce de moins au chargement.
+- Les flous (`backdrop-filter`) et le fond fixe sont retirés : coûteux à peindre sur mobile ; la barre d'onglets garde un fond presque opaque.
+- Lighthouse varie d'un passage à l'autre : `npm run audit` n'est pas dans `npm test` (il a aussi besoin d'internet pour la police). Mesures relevées : 92 et 93 sur trois passages après optimisation.
+- Les captures de référence dépendent des polices de l'ordinateur ; `npm run test:refs` les régénère.
 
 ---
 
 ## Points reportés
-_(aucun pour l'instant)_
+- **Essais sur de vrais appareils (phase 9)** : je n'ai pas d'iPhone, d'iPad ni de téléphone Android physiques. L'app est vérifiée en émulation Chrome (iPhone SE, 15 Pro, 15 Pro Max paysage, iPad Mini, iPad Pro paysage, Galaxy S9+, ordinateur), mais Safari réel peut différer (Face ID, installation sur l'écran d'accueil, appareil photo, IndexedDB en navigation privée). À faire par toi après la mise en ligne : `docs/checklist.md`, section « Essais sur de vrais appareils ».
+- **Préréglages bancaires** : construits d'après les formats publics, sans vrai relevé ; à confirmer avec tes fichiers CSV.
+- **Tickets réels** : `tests/tickets/` attend tes photos (une photo + son `.json`) pour enrichir les tests du scan.
+- **Hors périmètre de la 1.0** (roadmap) : connexion bancaire, synchronisation en temps réel, budget de couple partagé, notifications push app fermée, apps natives — tous demandent un serveur ou un budget.

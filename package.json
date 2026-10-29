@@ -1,6 +1,6 @@
 {
   "name": "budgetfold-os",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "BudgetFold OS : budget par enveloppes, 100 % local (PWA vanilla JS).",
   "scripts": {

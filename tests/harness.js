@@ -76,9 +76,10 @@ async function start() {
   });
 
   // `init` : script exécuté avant l'app (ex. remplacer navigator.storage pour un test).
-  async function open({ width = 1280, height = 900, mobile = false, today = '2026-10-15', storage = null, key = 'budgetfold-os:v3', page: file = '/', init = null } = {}) {
+  async function open({ width = 1280, height = 900, mobile = false, today = '2026-10-15', storage = null, key = 'budgetfold-os:v3', page: file = '/', init = null, device = null } = {}) {
     const page = await browser.newPage();
-    await page.setViewport({ width, height, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
+    if (device) await page.emulate(device);
+    else await page.setViewport({ width, height, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
     page.on('console', async (m) => { if (m.type() === 'warn') { const a = await Promise.all(m.args().map((x) => x.evaluate((v) => (v instanceof Error ? v.stack : String(v))).catch(() => '?'))); logs.push('WARN ' + a.join(' ')); return; } if (['error', 'warning', 'warn'].includes(m.type()) && !/Failed to load resource/.test(m.text())) logs.push(`[${width}] ${m.type()}: ${m.text()}`); });
     page.on('pageerror', (e) => logs.push(`[${width}] pageerror: ${e.message}`));
     await page.setBypassServiceWorker(true);

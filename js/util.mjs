@@ -4,7 +4,7 @@
 export const hooks = {};
 
 
-export const VERSION = '3.0';
+export const VERSION = '1.0.0';
 export const DATA_VERSION = 4;
 export const STORAGE_KEY = 'budgetfold-os:v4';
 export const V3_KEY = 'budgetfold-os:v3';
