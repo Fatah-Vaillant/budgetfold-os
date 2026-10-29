@@ -123,4 +123,4 @@ async function start() {
   return { open, close, logs, requests, port, browser };
 }
 
-module.exports = { start };
+module.exports = { start, launchBrowser };

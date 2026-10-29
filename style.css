@@ -62,7 +62,6 @@ body {
     radial-gradient(900px 420px at 92% -8%, rgba(30, 58, 138, 0.07), transparent 65%),
     radial-gradient(700px 380px at -6% 14%, rgba(16, 185, 129, 0.05), transparent 60%),
     var(--bg);
-  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
@@ -592,7 +591,6 @@ button {
   gap: 4px;
   padding: 14px 14px 15px;
   background: rgba(15, 23, 42, 0.28);
-  backdrop-filter: blur(8px);
 }
 
 .stat dt {
@@ -754,8 +752,6 @@ button {
   border-radius: 20px;
   background: var(--glass);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .tab {
@@ -1882,9 +1878,7 @@ select:focus {
 }
 
 .sheet::backdrop {
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(15, 23, 42, 0.55);
 }
 
 .sheet[open] {
@@ -2195,7 +2189,6 @@ select:focus {
   color: #fff;
   background: rgba(15, 23, 42, 0.95);
   box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(10px);
   pointer-events: auto;
   animation: toast-in 0.4s var(--ease);
 }
@@ -4995,7 +4988,7 @@ input[type="month"] {
   --heat-1: #fff5f6;
   --heat-2: #ffe4e8;
   --heat-3: #fecdd5;
-  --glass: rgba(255, 255, 255, 0.72);
+  --glass: rgba(255, 255, 255, 0.94);
   --glass-soft: rgba(255, 255, 255, 0.55);
   color-scheme: light;
 }
@@ -5033,7 +5026,7 @@ input[type="month"] {
   --heat-1: #2a1824;
   --heat-2: #3b1d2c;
   --heat-3: #522238;
-  --glass: rgba(18, 27, 46, 0.78);
+  --glass: rgba(18, 27, 46, 0.95);
   --glass-soft: rgba(18, 27, 46, 0.55);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
@@ -5067,7 +5060,7 @@ input[type="month"] {
   --indigo-soft: #fbeaf3;
   --indigo-line: #f0c3d9;
   --indigo-ink: #8e2457;
-  --glass: rgba(255, 255, 255, 0.78);
+  --glass: rgba(255, 255, 255, 0.94);
 }
 
 :root[data-theme="candy"] {
@@ -5090,7 +5083,7 @@ input[type="month"] {
   --indigo-soft: #ffe0ef;
   --indigo-line: #f7b2d2;
   --indigo-ink: #8f1450;
-  --glass: rgba(255, 247, 251, 0.82);
+  --glass: rgba(255, 247, 251, 0.95);
   --glass-soft: rgba(255, 247, 251, 0.6);
 }
 

@@ -1,4 +1,5 @@
 // BudgetFold OS · module ui (voir CLAUDE.md, « Architecture »).
+import { ICONS } from './icons.mjs';
 import { FREQS, GOAL_TYPES, LEGACY_KEY, NOTES_MAX, PALETTE, PERIODS, PRIORITIES, PROJECT_ICONS, RING_C, STORAGE_KEY, TIMINGS, V2_KEY, V3_KEY, addDays, capitalize, clampDay, clampInt, cleanName, cleanSim, cleanText, clock, dayHeading, dayOf, daysBetween, fail, fmtInt, hooks, isISO, isMonthKey, isoFor, maxISO, minISO, money, moneyRound, monthDiff, monthName, monthOf, monthShort, monthlyEq, normName, ofMonth, ok, pad, parseAmount, parseDayInput, parseISO, plural, reduceMotion, relDay, ruleIcon, shiftMonth, shortDate, toInputValue, uid } from './util.mjs';
 import { ACCOUNT_KINDS, CLOSE_ACTIONS, ENV_ICONS, budgetKey, commit, currentMonth, cycleEnd, cycleStart, emptyState, envLook, findEnv, findRule, fromAnyVersion, inCycle, lastAddedId, load, payDates, periodLabel, projectDone, replaceState, save, setLastAddedId, spendEnv, state } from './data.mjs';
 import { accountBalance, accountOf, addAccount, addFavorite, addRule, addSplit, addSubscription, addTransaction, addWish, buildIcs, cashflow, closableRows, closeMonth, closingDefaults, computeInsights, createEnvelope, deleteAccount, deleteCatRule, deleteEnvelope, deleteFavorite, deleteMove, deleteRule, deleteTransaction, derive, detectSubscriptions, durationLabel, ensureSafety, envMonthAlloc, envRow, envelopeSuggestions, favoriteSuggestions, findAccount, firstKey, forecast, freeAfter, frequentAmounts, guessEnvelope, healthScore, learnRule, mainAccount, monthlyOf, monthlyReport, monthsToGoal, moveMoney, nextOccurrence, nextPayMonth, noSpendStreak, occurrences, pendingClosings, postRecurring, proRevenue, projectAdvice, projectContribution, projectPlan, projectResults, recentTwin, reconcileAccount, reopenMonth, resetAllEnvelopes, resetEnvelope, restoreTransaction, runRollover, runScenarios, saveCatRule, searchTransactions, setProSettings, setSalary, setSettings, simScenarios, spendingHours, splitNeeds, subscriptionsCost, upcomingEvents, updateEnvelope, updateProjectInfo, updateRule, updateTransaction, useFavorite, validateTx } from './engine.mjs';
@@ -72,7 +73,22 @@ export const h = (tag, props, ...kids) => {
   }
   return el;
 };
-export const icon = (name) => h('i', { 'data-lucide': name });
+// Icônes Lucide dessinées en SVG à partir de js/icons.mjs (pas de bibliothèque à télécharger).
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_ATTRS = { xmlns: SVG_NS, width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+export function svgIcon(name, extraClass = '') {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  for (const [k, v] of Object.entries(SVG_ATTRS)) svg.setAttribute(k, v);
+  svg.setAttribute('class', `lucide lucide-${name}${extraClass ? ` ${extraClass}` : ''}`);
+  svg.setAttribute('aria-hidden', 'true');
+  for (const [tag, attrs] of ICONS[name] || []) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+    svg.append(el);
+  }
+  return svg;
+}
+export const icon = (name) => svgIcon(name);
 export const fill = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
 
 export let iconQueued = false;
@@ -81,7 +97,8 @@ export function flushIcons() {
   iconQueued = true;
   queueMicrotask(() => {
     iconQueued = false;
-    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    // Icônes écrites dans le HTML (<i data-lucide="…">) : remplacées par leur SVG.
+    document.querySelectorAll('i[data-lucide]').forEach((i) => i.replaceWith(svgIcon(i.dataset.lucide, i.getAttribute('class') || '')));
   });
 }
 
@@ -4366,7 +4383,7 @@ window.addEventListener('storage', (e) => {
 });
 
 if (
-  'serviceWorker' in navigator &&
+  'serviceWorker' in navigator && !window.BUDGETFOLD_SINGLE_FILE &&
   (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
 ) {
   // Nouvelle version : le nouveau service worker attend ; l'utilisateur choisit quand recharger.

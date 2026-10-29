@@ -15,9 +15,15 @@
   <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
   <link rel="stylesheet" href="style.css">
-  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js" defer></script>
+  <link rel="modulepreload" href="js/icons.mjs">
+  <link rel="modulepreload" href="js/util.mjs">
+  <link rel="modulepreload" href="js/data.mjs">
+  <link rel="modulepreload" href="js/engine.mjs">
+  <link rel="modulepreload" href="js/io.mjs">
+  <link rel="modulepreload" href="js/ui.mjs">
   <script type="module" src="js/main.mjs"></script>
 </head>
 <body data-tab="home">

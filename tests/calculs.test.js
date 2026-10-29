@@ -1,3 +1,4 @@
+// Calculs : premier lancement, reste à vivre, enveloppes, saisie, projets, sauvegarde.
 const { start } = require('./harness');
 const demo = require('./demo');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,7 +34,6 @@ const D = (p, key) => p.evaluate((k) => { const d = window.BudgetFold.derive(k);
 
 (async () => {
   const H = await start();
-
   // 1. Onboarding
   {
     const p = await H.open({});
@@ -241,105 +241,6 @@ const D = (p, key) => p.evaluate((k) => { const d = window.BudgetFold.derive(k);
 
     box = await sheet({ edit: 'p1', fields: { 'env-monthly': '300' } });
     check('bug 1.1: editing active project frees its current mise only', /Tamargeactuelle:799,94€/.test(box) && /resterait499,94€/.test(box), box);
-    await q.close();
-  }
-
-  // 6. Rules edit / delete
-  {
-    const q = await H.open({ storage: clone(demo) });
-    await q.evaluate(() => window.BudgetFold.actions.openRule(window.BudgetFold.getState().recurring.find((r) => r.id === 'r1')));
-    check('rule sheet: once option disabled', await q.evaluate(() => document.querySelector('#tx-repeat option[value="once"]').disabled));
-    check('rule sheet: date label À partir du', (await q.evaluate(() => document.getElementById('tx-date-label').textContent)) === 'À partir du');
-    await q.evaluate(() => { const a = document.getElementById('tx-amount'); a.value = '650'; a.dispatchEvent(new Event('input')); });
-    await submitTx(q);
-    let s = await S(q);
-    check('rule updated to 650', s.recurring.find((r) => r.id === 'r1').amount === 65000);
-    check('past loyer tx unchanged', s.transactions.find((t) => t.recId === 'r1').amount === 62000);
-    const nov = await D(q, '2026-11');
-    check('Nov loyer uses new amount', nov.charges >= 65000);
-    const del = await q.evaluate(() => window.BudgetFold.actions.deleteRule('r6'));
-    s = await S(q);
-    check('delete rule keeps past occurrences', del.ok && s.transactions.filter((t) => t.recId === 'r6').length === 4);
-    await q.evaluate(() => window.BudgetFold.actions.openTx(window.BudgetFold.getState().transactions.find((t) => t.recId === 'r1')));
-    check('auto tx shows series note', await q.evaluate(() => !document.getElementById('tx-series').hidden && /automatiquement/.test(document.getElementById('tx-series-text').textContent)));
-    await q.evaluate(() => document.getElementById('dlg-tx').close());
-    await q.close();
-  }
-
-  // 7. Agenda UI: null bug, dots, month nav, add on day
-  {
-    const q = await H.open({ storage: clone(demo) });
-    await q.evaluate(() => window.BudgetFold.setTab('agenda'));
-    await wait(200);
-    const detail = await q.evaluate(() => document.getElementById('day-detail').textContent);
-    check('day detail has no "null"', !/null|undefined/.test(detail), detail);
-    const spentDots = await q.evaluate(() => document.querySelectorAll('#calendar .dot-spent').length);
-    check('calendar shows spending dots', spentDots >= 5, spentDots);
-    check('calendar shows planned dots (future café)', await q.evaluate(() => document.querySelectorAll('#calendar .dot-planned').length >= 10));
-    check('calendar day 9 shows −99', await q.evaluate(() => document.querySelector('[data-date="2026-10-09"] .cal-spent').textContent === '−99'));
-    await q.evaluate(() => document.getElementById('a-next').click());
-    await q.evaluate(() => document.getElementById('a-next').click());
-    check('nav to December', (await q.evaluate(() => document.getElementById('cal-label').textContent)) === 'Décembre 2026');
-    await q.evaluate(() => document.querySelector('[data-date="2026-12-10"]').click());
-    const dd = await q.evaluate(() => document.getElementById('day-detail').textContent);
-    check('Dec 10 lists Cadeaux de Noël', /Cadeaux de Noël/.test(dd), dd);
-    await q.evaluate(() => document.querySelector('.add-on-day').click());
-    check('add on day pre-fills date', (await q.evaluate(() => document.getElementById('tx-date').value)) === '2026-12-10');
-    check('add on day title is prévue', (await q.evaluate(() => document.getElementById('tx-title').textContent)) === 'Dépense prévue');
-    await q.evaluate(() => document.getElementById('dlg-tx').close());
-    check('forecast has 6 rows, Dec negative', await q.evaluate(() => document.querySelectorAll('.fc-row').length === 6 && document.querySelector('.fc-row[data-key="2026-12"]').dataset.negative === 'true'));
-    await q.evaluate(() => document.querySelector('.fc-row[data-key="2027-01"]').click());
-    check('forecast row navigates calendar', (await q.evaluate(() => document.getElementById('cal-label').textContent)) === 'Janvier 2027');
-    check('échéancier lists 6 rules', await q.evaluate(() => document.querySelectorAll('#rec-list .rec-row').length === 6));
-    await q.evaluate(() => window.BudgetFold.setTab('journal'));
-    await q.evaluate(() => document.getElementById('j-next').click());
-    check('journal Nov shows planned billet', await q.evaluate(() => /Billet de train/.test(document.getElementById('j-list').textContent) && !!document.querySelector('.tag-planned')));
-    await q.evaluate(() => window.BudgetFold.setTab('report'));
-    check('report day stats rendered', await q.evaluate(() => document.querySelectorAll('.wd').length === 7 && /jours avec dépenses/.test(document.getElementById('r-days').textContent)));
-    const all = await q.evaluate(() => document.body.innerText);
-    check('no "null"/"undefined"/"NaN" in report', !/\bnull\b|undefined|NaN/.test(all));
-    await q.close();
-  }
-
-  // 8. Mobile tab switching
-  {
-    const q = await H.open({ storage: clone(demo), width: 390, height: 844, mobile: true });
-    const vis = (sel) => q.evaluate((s) => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().height > 0; }, sel);
-    check('mobile home: engine visible, mini hidden', (await vis('.engine')) && !(await vis('#mini')));
-    await q.evaluate(() => document.querySelector('[data-tab="journal"]').click());
-    await wait(300);
-    check('mobile journal: engine hidden', !(await vis('.engine')));
-    check('mobile journal: mini summary visible', await vis('#mini'));
-    check('mobile journal: view title visible', await vis('[data-view="journal"] .view-head'));
-    check('mobile: scrolled to top', (await q.evaluate(() => window.scrollY)) === 0);
-    check('mobile: desktop add hidden, nav + visible', !(await vis('#top-add')) && (await vis('#nav-add')));
-    await q.evaluate(() => document.getElementById('mini').click());
-    await wait(200);
-    check('mini click → home', await q.evaluate(() => document.body.dataset.tab === 'home'));
-    await q.evaluate(() => document.getElementById('nav-add').click());
-    check('nav + opens sheet', await q.evaluate(() => document.getElementById('dlg-tx').open));
-    const overflow = await q.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    check('no horizontal overflow on mobile', overflow <= 0, overflow);
-    await q.close();
-  }
-
-  // 9. Migration v2 → v3
-  {
-    const v2 = {
-      v: 2, salary: 185000, salaryDay: 3, openingBalance: null, lastRollover: '2026-10', prefs: { onboarded: true },
-      envelopes: [{ id: 'e1', kind: 'spend', name: 'Courses', max: 30000 }, { id: 'p1', kind: 'project', name: 'Voyage', target: 100000, saved: 20000, monthly: 10000 }],
-      recurring: [{ id: 'r1', type: 'charge', label: 'Loyer', amount: 60000, day: 1, cat: 'logement' }, { id: 'r2', type: 'income', label: 'APL', amount: 15000, day: 25, cat: 'revenu' }],
-      transactions: [{ id: 't1', type: 'expense', envId: 'e1', amount: 5000, date: '2026-10-03', note: 'Carrefour' }]
-    };
-    const q = await H.open({ storage: v2, key: 'budgetfold-os:v2' });
-    const s = await S(q);
-    check('v2 migrated: rules monthly', s.recurring.length === 2 && s.recurring.every((r) => r.freq === 'month'));
-    check('v2 migrated: loyer of Oct 1 posted once', s.transactions.filter((t) => t.recId === 'r1').length === 1);
-    check('v2 migrated: APL (25) pending', !s.transactions.some((t) => t.recId === 'r2'));
-    check('v2 migrated: project active', s.envelopes.find((e) => e.id === 'p1').mode === 'active');
-    const d = await D(q);
-    check('v2 migrated: same reste à vivre as v2 logic', d.free === 185000 + 15000 - 60000 - 30000 - 10000, d.free);
-    check('v4 key written', await q.evaluate(() => !!localStorage.getItem('budgetfold-os:v4')));
     await q.close();
   }
 
